@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Activity Timeline</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Activity Probe</p>
+        <h1>Timeline</h1>
+      </div>
+      <div class="controls">
+        <label>
+          Day
+          <select id="day"></select>
+        </label>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <p id="status" class="status">Loading observations…</p>
+
+    <section class="workspace">
+      <div class="card timeline-card" aria-labelledby="timeline-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="timeline-heading">Observed time</h2>
+            <p id="range"></p>
+          </div>
+          <div class="timeline-controls" aria-label="Timeline zoom controls">
+            <button id="zoom-out" type="button" title="Zoom out">−</button>
+            <button id="zoom-in" type="button" title="Zoom in">+</button>
+            <button id="fit-activity" type="button">Fit</button>
+            <button id="full-day" type="button">Day</button>
+          </div>
+        </div>
+        <div
+          id="timeline"
+          class="timeline"
+          title="Scroll to zoom; drag empty space to pan"
+        >
+          <div id="axis" class="axis"></div>
+          <div class="timeline-rail"></div>
+          <div id="blocks" class="blocks"></div>
+        </div>
+        <p id="total" class="timeline-total"></p>
+      </div>
+
+      <aside id="detail" class="card detail-card">
+        <div id="detail-empty" class="detail-empty">
+          <span>↖</span>
+          <h2>Select an activity</h2>
+          <p>Click a block to inspect its window-level subactivities.</p>
+        </div>
+        <div id="detail-content" class="detail-content" hidden>
+          <div class="detail-accent" id="detail-accent"></div>
+          <p class="eyebrow">Activity details</p>
+          <h2 id="detail-app"></h2>
+          <p id="detail-meta" class="detail-meta"></p>
+          <div class="detail-rule"></div>
+          <div class="detail-heading">
+            <h3>Subactivities</h3>
+            <span id="detail-count"></span>
+          </div>
+          <div id="subactivities" class="subactivities"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
