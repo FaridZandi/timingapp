@@ -189,7 +189,7 @@ function buildDisplayBlocks() {
     index = cursor;
   }
 
-  return displayBlocks;
+  return applyContinuityLayout(displayBlocks, millisecondsPerPixel);
 }
 
 function singleDisplayBlock(block, rawIndex) {
@@ -240,9 +240,99 @@ function visibleClusterApps(block) {
     bundleIdentifier: "__other__",
     duration: remaining.reduce((total, app) => total + app.duration, 0),
     visits: remaining.reduce((total, app) => total + app.visits, 0),
-    groupedApps: remaining.map(app => app.appName)
+    groupedApps: remaining.map(app => app.appName),
+    groupedBundleIdentifiers: remaining.map(app => app.bundleIdentifier)
   });
   return visible;
+}
+
+function applyContinuityLayout(displayBlocks, millisecondsPerPixel) {
+  const maximumGap = Math.min(
+    60_000,
+    Math.max(10_000, millisecondsPerPixel * 3)
+  );
+
+  const consumedSingles = new Set();
+  const replacements = new Map();
+
+  displayBlocks.forEach((cluster, clusterIndex) => {
+    if (cluster.kind !== "cluster") return;
+
+    const lanes = visibleClusterApps(cluster);
+    const laneBlocks = lanes.map((app, laneIndex) => {
+      const includedBundles = new Set(
+        app.groupedBundleIdentifiers || [app.bundleIdentifier]
+      );
+      const rawIndices = cluster.rawIndices.filter(rawIndex =>
+        includedBundles.has(state.blocks[rawIndex].bundleIdentifier)
+      );
+
+      const lane = {
+        kind: "single",
+        key: `lane:${cluster.key}:${app.bundleIdentifier}`,
+        rawIndices,
+        start: cluster.start,
+        end: cluster.end,
+        appName: app.appName,
+        bundleIdentifier: app.bundleIdentifier,
+        laneIndex,
+        laneCount: lanes.length,
+        isSemanticLane: true
+      };
+
+      if (app.bundleIdentifier === "__other__") return lane;
+
+      let cursor = clusterIndex - 1;
+      while (cursor >= 0) {
+        const adjacent = displayBlocks[cursor];
+        const next = displayBlocks[cursor + 1];
+        if (
+          consumedSingles.has(cursor) ||
+          adjacent.kind !== "single" ||
+          adjacent.bundleIdentifier !== app.bundleIdentifier ||
+          next.start - adjacent.end > maximumGap
+        ) {
+          break;
+        }
+        lane.start = Math.min(lane.start, adjacent.start);
+        lane.rawIndices.unshift(...adjacent.rawIndices);
+        consumedSingles.add(cursor);
+        cursor -= 1;
+      }
+
+      cursor = clusterIndex + 1;
+      while (cursor < displayBlocks.length) {
+        const adjacent = displayBlocks[cursor];
+        const previous = displayBlocks[cursor - 1];
+        if (
+          consumedSingles.has(cursor) ||
+          adjacent.kind !== "single" ||
+          adjacent.bundleIdentifier !== app.bundleIdentifier ||
+          adjacent.start - previous.end > maximumGap
+        ) {
+          break;
+        }
+        lane.end = Math.max(lane.end, adjacent.end);
+        lane.rawIndices.push(...adjacent.rawIndices);
+        consumedSingles.add(cursor);
+        cursor += 1;
+      }
+
+      return lane;
+    });
+
+    replacements.set(clusterIndex, laneBlocks);
+  });
+
+  const result = [];
+  displayBlocks.forEach((block, index) => {
+    if (replacements.has(index)) {
+      result.push(...replacements.get(index));
+    } else if (!consumedSingles.has(index)) {
+      result.push(block);
+    }
+  });
+  return result;
 }
 
 function positionBlock(node, block) {
@@ -264,6 +354,16 @@ function positionBlock(node, block) {
   const pixelHeight = height / 100 * elements.timeline.clientHeight;
   node.classList.toggle("has-label", pixelHeight >= 30);
   node.classList.toggle("has-time", pixelHeight >= 54);
+  node.classList.toggle("continues-before", Boolean(block.continuesBefore));
+  node.classList.toggle("continues-after", Boolean(block.continuesAfter));
+
+  if (block.kind === "single" && block.laneCount) {
+    node.style.left = `${block.laneIndex / block.laneCount * 100}%`;
+    node.style.width = `${100 / block.laneCount}%`;
+  } else {
+    node.style.left = "0";
+    node.style.width = "100%";
+  }
 }
 
 function createDisplayNode(block) {
@@ -289,7 +389,9 @@ function updateDisplayNode(node, block) {
   node.classList.toggle("selected", state.selectedDisplayKey === block.key);
 
   if (block.kind === "single") {
-    const color = colorFor(block.bundleIdentifier);
+    const color = block.bundleIdentifier === "__other__"
+      ? "#778087"
+      : colorFor(block.bundleIdentifier);
     node.style.setProperty("--block-color", color);
     node.querySelector("strong").textContent = block.appName;
     node.querySelector("span").textContent =
@@ -471,7 +573,9 @@ function renderDetail() {
   const periodIndices = rawBlocks.flatMap(rawBlock => rawBlock.periodIndices);
 
   if (block.kind === "single") {
-    elements.detailAccent.style.background = colorFor(block.bundleIdentifier);
+    elements.detailAccent.style.background = block.bundleIdentifier === "__other__"
+      ? "#778087"
+      : colorFor(block.bundleIdentifier);
     elements.detailApp.textContent = block.appName;
   } else {
     elements.detailAccent.style.background =
@@ -501,7 +605,7 @@ function renderDetail() {
     marker.style.background = colorFor(period.bundle_identifier);
     const content = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = block.kind === "cluster"
+    title.textContent = block.kind === "cluster" || block.bundleIdentifier === "__other__"
       ? `${period.app_name} — ${period.window_title || "No window title"}`
       : period.window_title || "No window title";
     const time = document.createElement("span");

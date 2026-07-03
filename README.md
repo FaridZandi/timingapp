@@ -85,6 +85,9 @@ are combined into multi-app rotation blocks. Participating apps appear as
 equal-width side-by-side lanes. Up to three apps are named directly; any
 additional apps share a fourth **Other** lane. The grouping is based on rendered
 pixel size, so zooming in automatically restores the exact individual periods.
+An app immediately before or after a rotation is absorbed into its rotation
+lane, producing one continuous block with a stable position and width. Unused
+lane space remains visible rather than stretching that block.
 
 To use another data file or port:
 

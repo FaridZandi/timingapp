@@ -209,6 +209,16 @@ button { cursor: pointer; }
   z-index: 3;
 }
 
+.activity-block.continues-before {
+  border-top-left-radius: 1px;
+  border-top-right-radius: 1px;
+}
+
+.activity-block.continues-after {
+  border-bottom-left-radius: 1px;
+  border-bottom-right-radius: 1px;
+}
+
 .activity-block.cluster {
   background: #eceff5;
   border-left: 0;
