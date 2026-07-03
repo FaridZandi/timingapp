@@ -80,14 +80,12 @@ full-day view. Scrolling over the timeline zooms around the pointer, and draggin
 empty timeline space pans vertically. Clicking an application block opens its
 window-title subactivities in the detail pane.
 
-At wider zoom levels, short and tightly spaced switches between different apps
-are combined into multi-app rotation blocks. Participating apps appear as
-equal-width side-by-side lanes. Up to three apps are named directly; any
-additional apps share a fourth **Other** lane. The grouping is based on rendered
-pixel size, so zooming in automatically restores the exact individual periods.
-An app immediately before or after a rotation is absorbed into its rotation
-lane, producing one continuous block with a stable position and width. Unused
-lane space remains visible rather than stretching that block.
+At wider zoom levels, short nearby periods from the same application are
+summarized into a larger time span. Isolated periods below roughly three
+rendered pixels are omitted. After summarization, overlapping application spans
+share equal-width lanes. Up to three applications are named directly; additional
+overlapping applications are represented by a fourth **Other** lane. Zooming in
+reduces summarization and restores the underlying periods.
 
 To use another data file or port:
 

@@ -136,202 +136,190 @@ function buildDisplayBlocks() {
   const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
-  const smallBlockThreshold = millisecondsPerPixel * 32;
+  const smallBlockThreshold = millisecondsPerPixel * 28;
+  const ignoredBlockThreshold = millisecondsPerPixel * 3;
   const closeGapThreshold = Math.min(
-    120_000,
-    Math.max(15_000, millisecondsPerPixel * 7)
+    300_000,
+    Math.max(20_000, millisecondsPerPixel * 24)
   );
-  const displayBlocks = [];
-  let index = 0;
 
-  while (index < state.blocks.length) {
-    const first = state.blocks[index];
-    const firstIsSmall = first.end - first.start <= smallBlockThreshold;
-
-    if (!firstIsSmall) {
-      displayBlocks.push(singleDisplayBlock(first, index));
-      index += 1;
-      continue;
-    }
-
-    const candidates = [index];
-    let cursor = index + 1;
-    while (cursor < state.blocks.length) {
-      const previous = state.blocks[cursor - 1];
-      const current = state.blocks[cursor];
-      const isSmall = current.end - current.start <= smallBlockThreshold;
-      const isClose = current.start - previous.end <= closeGapThreshold;
-      if (!isSmall || !isClose) break;
-      candidates.push(cursor);
-      cursor += 1;
-    }
-
-    const appCount = new Set(
-      candidates.map(rawIndex => state.blocks[rawIndex].bundleIdentifier)
-    ).size;
-    const shouldCluster =
-      appCount >= 2 &&
-      (
-        candidates.length >= 3 ||
-        candidates.every(rawIndex =>
-          state.blocks[rawIndex].end - state.blocks[rawIndex].start
-            <= millisecondsPerPixel * 12
-        )
-      );
-
-    if (shouldCluster) {
-      displayBlocks.push(clusterDisplayBlock(candidates));
-    } else {
-      candidates.forEach(rawIndex => {
-        displayBlocks.push(singleDisplayBlock(state.blocks[rawIndex], rawIndex));
-      });
-    }
-    index = cursor;
-  }
-
-  return applyContinuityLayout(displayBlocks, millisecondsPerPixel);
+  const summarized = summarizeBlocksByApplication(
+    smallBlockThreshold,
+    ignoredBlockThreshold,
+    closeGapThreshold
+  );
+  return assignOverlapLanes(summarized);
 }
 
-function singleDisplayBlock(block, rawIndex) {
+function basicDisplayBlock(block, rawIndex) {
   return {
     kind: "single",
-    key: `single:${rawIndex}`,
+    key: `basic:${rawIndex}`,
     rawIndices: [rawIndex],
     start: block.start,
     end: block.end,
     appName: block.appName,
-    bundleIdentifier: block.bundleIdentifier
+    bundleIdentifier: block.bundleIdentifier,
+    activeDuration: block.end - block.start,
+    isSummarized: false
   };
 }
 
-function clusterDisplayBlock(rawIndices) {
+function summarizedDisplayBlock(rawIndices) {
   const rawBlocks = rawIndices.map(index => state.blocks[index]);
-  const apps = new Map();
-
-  for (const block of rawBlocks) {
-    const existing = apps.get(block.bundleIdentifier) || {
-      appName: block.appName,
-      bundleIdentifier: block.bundleIdentifier,
-      duration: 0,
-      visits: 0
-    };
-    existing.duration += block.end - block.start;
-    existing.visits += 1;
-    apps.set(block.bundleIdentifier, existing);
-  }
-
+  const first = rawBlocks[0];
   return {
-    kind: "cluster",
-    key: `cluster:${rawIndices[0]}:${rawIndices[rawIndices.length - 1]}`,
+    kind: "single",
+    key: `summary:${first.bundleIdentifier}:${rawIndices[0]}:${rawIndices[rawIndices.length - 1]}`,
     rawIndices,
     start: rawBlocks[0].start,
     end: rawBlocks[rawBlocks.length - 1].end,
-    apps: [...apps.values()].sort((left, right) => right.duration - left.duration)
+    appName: first.appName,
+    bundleIdentifier: first.bundleIdentifier,
+    activeDuration: rawBlocks.reduce(
+      (total, block) => total + block.end - block.start,
+      0
+    ),
+    isSummarized: true
   };
 }
 
-function visibleClusterApps(block) {
-  if (block.apps.length <= 3) return block.apps;
-
-  const visible = block.apps.slice(0, 3);
-  const remaining = block.apps.slice(3);
-  visible.push({
-    appName: "Other",
-    bundleIdentifier: "__other__",
-    duration: remaining.reduce((total, app) => total + app.duration, 0),
-    visits: remaining.reduce((total, app) => total + app.visits, 0),
-    groupedApps: remaining.map(app => app.appName),
-    groupedBundleIdentifiers: remaining.map(app => app.bundleIdentifier)
-  });
-  return visible;
-}
-
-function applyContinuityLayout(displayBlocks, millisecondsPerPixel) {
-  const maximumGap = Math.min(
-    60_000,
-    Math.max(10_000, millisecondsPerPixel * 3)
-  );
-
-  const consumedSingles = new Set();
-  const replacements = new Map();
-
-  displayBlocks.forEach((cluster, clusterIndex) => {
-    if (cluster.kind !== "cluster") return;
-
-    const lanes = visibleClusterApps(cluster);
-    const laneBlocks = lanes.map((app, laneIndex) => {
-      const includedBundles = new Set(
-        app.groupedBundleIdentifiers || [app.bundleIdentifier]
-      );
-      const rawIndices = cluster.rawIndices.filter(rawIndex =>
-        includedBundles.has(state.blocks[rawIndex].bundleIdentifier)
-      );
-
-      const lane = {
-        kind: "single",
-        key: `lane:${cluster.key}:${app.bundleIdentifier}`,
-        rawIndices,
-        start: cluster.start,
-        end: cluster.end,
-        appName: app.appName,
-        bundleIdentifier: app.bundleIdentifier,
-        laneIndex,
-        laneCount: lanes.length,
-        isSemanticLane: true
-      };
-
-      if (app.bundleIdentifier === "__other__") return lane;
-
-      let cursor = clusterIndex - 1;
-      while (cursor >= 0) {
-        const adjacent = displayBlocks[cursor];
-        const next = displayBlocks[cursor + 1];
-        if (
-          consumedSingles.has(cursor) ||
-          adjacent.kind !== "single" ||
-          adjacent.bundleIdentifier !== app.bundleIdentifier ||
-          next.start - adjacent.end > maximumGap
-        ) {
-          break;
-        }
-        lane.start = Math.min(lane.start, adjacent.start);
-        lane.rawIndices.unshift(...adjacent.rawIndices);
-        consumedSingles.add(cursor);
-        cursor -= 1;
-      }
-
-      cursor = clusterIndex + 1;
-      while (cursor < displayBlocks.length) {
-        const adjacent = displayBlocks[cursor];
-        const previous = displayBlocks[cursor - 1];
-        if (
-          consumedSingles.has(cursor) ||
-          adjacent.kind !== "single" ||
-          adjacent.bundleIdentifier !== app.bundleIdentifier ||
-          adjacent.start - previous.end > maximumGap
-        ) {
-          break;
-        }
-        lane.end = Math.max(lane.end, adjacent.end);
-        lane.rawIndices.push(...adjacent.rawIndices);
-        consumedSingles.add(cursor);
-        cursor += 1;
-      }
-
-      return lane;
-    });
-
-    replacements.set(clusterIndex, laneBlocks);
+function summarizeBlocksByApplication(
+  smallBlockThreshold,
+  ignoredBlockThreshold,
+  closeGapThreshold
+) {
+  const byApplication = new Map();
+  state.blocks.forEach((block, rawIndex) => {
+    const entries = byApplication.get(block.bundleIdentifier) || [];
+    entries.push({ block, rawIndex });
+    byApplication.set(block.bundleIdentifier, entries);
   });
 
   const result = [];
-  displayBlocks.forEach((block, index) => {
-    if (replacements.has(index)) {
-      result.push(...replacements.get(index));
-    } else if (!consumedSingles.has(index)) {
+  for (const entries of byApplication.values()) {
+    let index = 0;
+    while (index < entries.length) {
+      const current = entries[index];
+      const duration = current.block.end - current.block.start;
+
+      if (duration > smallBlockThreshold) {
+        result.push(basicDisplayBlock(current.block, current.rawIndex));
+        index += 1;
+        continue;
+      }
+
+      const candidates = [current];
+      let cursor = index + 1;
+      while (cursor < entries.length) {
+        const previous = entries[cursor - 1].block;
+        const next = entries[cursor].block;
+        const nextIsSmall = next.end - next.start <= smallBlockThreshold;
+        const nextIsClose = next.start - previous.end <= closeGapThreshold;
+        if (!nextIsSmall || !nextIsClose) break;
+        candidates.push(entries[cursor]);
+        cursor += 1;
+      }
+
+      if (candidates.length >= 2) {
+        result.push(summarizedDisplayBlock(
+          candidates.map(candidate => candidate.rawIndex)
+        ));
+      } else if (duration >= ignoredBlockThreshold) {
+        result.push(basicDisplayBlock(current.block, current.rawIndex));
+      }
+      index = cursor;
+    }
+  }
+
+  return result.sort((left, right) =>
+    left.start - right.start || left.end - right.end
+  );
+}
+
+function assignOverlapLanes(blocks) {
+  const result = [];
+  let component = [];
+  let componentEnd = -Infinity;
+
+  function finishComponent() {
+    if (!component.length) return;
+
+    const totals = new Map();
+    for (const block of component) {
+      const value = totals.get(block.bundleIdentifier) || {
+        bundleIdentifier: block.bundleIdentifier,
+        appName: block.appName,
+        duration: 0,
+        firstStart: block.start
+      };
+      value.duration += block.activeDuration;
+      value.firstStart = Math.min(value.firstStart, block.start);
+      totals.set(block.bundleIdentifier, value);
+    }
+
+    let componentBlocks = component;
+    let applications = [...totals.values()];
+
+    if (applications.length > 4) {
+      const retained = applications
+        .slice()
+        .sort((left, right) => right.duration - left.duration)
+        .slice(0, 3);
+      const retainedBundles = new Set(retained.map(app => app.bundleIdentifier));
+      const overflow = component.filter(
+        block => !retainedBundles.has(block.bundleIdentifier)
+      );
+      const explicit = component.filter(
+        block => retainedBundles.has(block.bundleIdentifier)
+      );
+      const other = {
+        kind: "single",
+        key: `other:${overflow.map(block => block.key).join("|")}`,
+        rawIndices: overflow.flatMap(block => block.rawIndices),
+        start: Math.min(...overflow.map(block => block.start)),
+        end: Math.max(...overflow.map(block => block.end)),
+        appName: "Other",
+        bundleIdentifier: "__other__",
+        activeDuration: overflow.reduce(
+          (total, block) => total + block.activeDuration,
+          0
+        ),
+        isSummarized: true
+      };
+      componentBlocks = [...explicit, other];
+      applications = [...retained, {
+        bundleIdentifier: "__other__",
+        appName: "Other",
+        duration: other.activeDuration,
+        firstStart: other.start
+      }];
+    }
+
+    applications.sort((left, right) => left.firstStart - right.firstStart);
+    const laneByBundle = new Map(
+      applications.map((app, laneIndex) => [app.bundleIdentifier, laneIndex])
+    );
+    for (const block of componentBlocks) {
+      block.laneIndex = laneByBundle.get(block.bundleIdentifier);
+      block.laneCount = applications.length;
       result.push(block);
     }
-  });
+
+    component = [];
+    componentEnd = -Infinity;
+  }
+
+  for (const block of blocks) {
+    if (component.length && block.start >= componentEnd) {
+      finishComponent();
+    }
+    component.push(block);
+    componentEnd = Math.max(componentEnd, block.end);
+  }
+  finishComponent();
+
+  result.sort((left, right) => left.start - right.start || left.laneIndex - right.laneIndex);
   return result;
 }
 
@@ -375,68 +363,24 @@ function createDisplayNode(block) {
   const title = document.createElement("strong");
   const meta = document.createElement("span");
   node.append(title, meta);
-
-  if (block.kind === "cluster") {
-    const apps = document.createElement("div");
-    apps.className = "cluster-lanes";
-    node.append(apps);
-  }
   return node;
 }
 
 function updateDisplayNode(node, block) {
   node.dataset.displayKey = block.key;
   node.classList.toggle("selected", state.selectedDisplayKey === block.key);
+  node.classList.toggle("summarized", block.isSummarized);
 
-  if (block.kind === "single") {
-    const color = block.bundleIdentifier === "__other__"
-      ? "#778087"
-      : colorFor(block.bundleIdentifier);
-    node.style.setProperty("--block-color", color);
-    node.querySelector("strong").textContent = block.appName;
-    node.querySelector("span").textContent =
-      `${formatClock(block.start)} · ${formatDuration(block.end - block.start)}`;
-    node.title =
-      `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}`;
-  } else {
-    const visibleApps = visibleClusterApps(block);
-    const colors = visibleApps.map(app =>
-      app.bundleIdentifier === "__other__"
-        ? "#778087"
-        : colorFor(app.bundleIdentifier)
-    );
-    node.style.setProperty("--block-color", colors[0]);
-    const gradient = colors.length === 2
-      ? `linear-gradient(180deg, ${colors[0]} 0 50%, ${colors[1]} 50% 100%)`
-      : `linear-gradient(180deg, ${colors.map((color, index) => {
-          const start = index / colors.length * 100;
-          const end = (index + 1) / colors.length * 100;
-          return `${color} ${start}% ${end}%`;
-        }).join(", ")})`;
-    node.style.setProperty("--cluster-stripe", gradient);
-    node.querySelector("strong").textContent =
-      `${block.apps.length} apps in rotation`;
-    node.querySelector("span").textContent =
-      `${formatClock(block.start)} · ${formatDuration(block.end - block.start)}`;
-    node.title =
-      `${block.apps.map(app => app.appName).join(", ")}\n` +
-      `${formatClock(block.start)}–${formatClock(block.end)}`;
-
-    const appList = node.querySelector(".cluster-lanes");
-    appList.replaceChildren();
-    for (const app of visibleApps) {
-      const label = document.createElement("i");
-      label.style.background = app.bundleIdentifier === "__other__"
-        ? "#778087"
-        : colorFor(app.bundleIdentifier);
-      label.title =
-        `${app.appName}: ${formatDuration(app.duration)} across ${app.visits} ` +
-        `${app.visits === 1 ? "visit" : "visits"}` +
-        (app.groupedApps ? `\n${app.groupedApps.join(", ")}` : "");
-      label.textContent = app.appName;
-      appList.append(label);
-    }
-  }
+  const color = block.bundleIdentifier === "__other__"
+    ? "#778087"
+    : colorFor(block.bundleIdentifier);
+  node.style.setProperty("--block-color", color);
+  node.querySelector("strong").textContent = block.appName;
+  node.querySelector("span").textContent =
+    `${formatClock(block.start)} · ${formatDuration(block.end - block.start)}`;
+  node.title =
+    `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}` +
+    (block.isSummarized ? `\nSummarized from ${block.rawIndices.length} blocks` : "");
 
   positionBlock(node, block);
 }
@@ -554,7 +498,7 @@ function renderSummary() {
   elements.status.textContent =
     `${state.observationCount.toLocaleString()} stored observations · live`;
   elements.total.textContent =
-    `${state.blocks.length} application periods · ${formatDuration(observed)} observed`;
+    `${state.displayBlocks.length} visible blocks · ${formatDuration(observed)} observed`;
 }
 
 function renderDetail() {
@@ -589,9 +533,7 @@ function renderDetail() {
     `${formatClock(block.start)}–${formatClock(block.end)} · ` +
     formatDuration(block.end - block.start);
   elements.detailCount.textContent =
-    block.kind === "cluster"
-      ? `${rawBlocks.length} switches · ${block.apps.length} apps`
-      : `${periodIndices.length} ${periodIndices.length === 1 ? "period" : "periods"}`;
+    `${periodIndices.length} ${periodIndices.length === 1 ? "period" : "periods"}`;
   elements.subactivities.replaceChildren();
 
   for (const periodIndex of periodIndices) {
@@ -605,7 +547,7 @@ function renderDetail() {
     marker.style.background = colorFor(period.bundle_identifier);
     const content = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = block.kind === "cluster" || block.bundleIdentifier === "__other__"
+    title.textContent = block.bundleIdentifier === "__other__"
       ? `${period.app_name} — ${period.window_title || "No window title"}`
       : period.window_title || "No window title";
     const time = document.createElement("span");
