@@ -82,9 +82,9 @@ window-title subactivities in the detail pane.
 
 At wider zoom levels, short and tightly spaced switches between different apps
 are combined into multi-app rotation blocks. Participating apps appear as
-side-by-side lanes sized by their share of the activity. The grouping is based
-on rendered pixel size, so zooming in automatically restores the exact
-individual periods.
+equal-width side-by-side lanes. Up to three apps are named directly; any
+additional apps share a fourth **Other** lane. The grouping is based on rendered
+pixel size, so zooming in automatically restores the exact individual periods.
 
 To use another data file or port:
 

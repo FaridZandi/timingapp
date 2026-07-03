@@ -230,6 +230,21 @@ function clusterDisplayBlock(rawIndices) {
   };
 }
 
+function visibleClusterApps(block) {
+  if (block.apps.length <= 3) return block.apps;
+
+  const visible = block.apps.slice(0, 3);
+  const remaining = block.apps.slice(3);
+  visible.push({
+    appName: "Other",
+    bundleIdentifier: "__other__",
+    duration: remaining.reduce((total, app) => total + app.duration, 0),
+    visits: remaining.reduce((total, app) => total + app.visits, 0),
+    groupedApps: remaining.map(app => app.appName)
+  });
+  return visible;
+}
+
 function positionBlock(node, block) {
   const span = state.viewportEnd - state.viewportStart;
   const visibleStart = Math.max(block.start, state.viewportStart);
@@ -282,7 +297,12 @@ function updateDisplayNode(node, block) {
     node.title =
       `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}`;
   } else {
-    const colors = block.apps.map(app => colorFor(app.bundleIdentifier));
+    const visibleApps = visibleClusterApps(block);
+    const colors = visibleApps.map(app =>
+      app.bundleIdentifier === "__other__"
+        ? "#778087"
+        : colorFor(app.bundleIdentifier)
+    );
     node.style.setProperty("--block-color", colors[0]);
     const gradient = colors.length === 2
       ? `linear-gradient(180deg, ${colors[0]} 0 50%, ${colors[1]} 50% 100%)`
@@ -302,13 +322,15 @@ function updateDisplayNode(node, block) {
 
     const appList = node.querySelector(".cluster-lanes");
     appList.replaceChildren();
-    for (const app of block.apps) {
+    for (const app of visibleApps) {
       const label = document.createElement("i");
-      label.style.background = colorFor(app.bundleIdentifier);
-      label.style.flexGrow = app.duration;
+      label.style.background = app.bundleIdentifier === "__other__"
+        ? "#778087"
+        : colorFor(app.bundleIdentifier);
       label.title =
         `${app.appName}: ${formatDuration(app.duration)} across ${app.visits} ` +
-        `${app.visits === 1 ? "visit" : "visits"}`;
+        `${app.visits === 1 ? "visit" : "visits"}` +
+        (app.groupedApps ? `\n${app.groupedApps.join(", ")}` : "");
       label.textContent = app.appName;
       appList.append(label);
     }

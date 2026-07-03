@@ -261,7 +261,7 @@ button { cursor: pointer; }
   border-right: 1px solid rgba(255, 255, 255, 0.55);
   color: transparent;
   display: flex;
-  flex-basis: 0;
+  flex: 1 1 0;
   font-size: 0;
   font-style: normal;
   font-weight: 700;
