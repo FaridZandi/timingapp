@@ -80,12 +80,27 @@ full-day view. Scrolling over the timeline zooms around the pointer, and draggin
 empty timeline space pans vertically. Clicking an application block opens its
 window-title subactivities in the detail pane.
 
-At wider zoom levels, short nearby periods from the same application are
-summarized into a larger time span. Isolated periods below roughly three
-rendered pixels are omitted. After summarization, overlapping application spans
-share equal-width lanes. Up to three applications are named directly; additional
-overlapping applications are represented by a fourth **Other** lane. Zooming in
-reduces summarization and restores the underlying periods.
+At wider zoom levels, nearby periods from the same application are summarized
+into a larger time span regardless of their individual duration. Isolated
+periods below roughly three rendered pixels are omitted. After summarization,
+overlapping application spans share equal-width lanes. Up to three applications
+are named directly; additional overlapping applications are represented by a
+fourth **Other** lane. Zooming in reduces the proximity window and restores the
+underlying periods. A summarized block spans from its first start to its last
+end, but its displayed active time is the sum of its constituent periods rather
+than the full enclosing span.
+
+After two minutes without keyboard or pointer input, the dashboard
+retroactively ends the foreground-app block at the last input time and shows a
+separate gray **Idle** block. Idle time is not included in application active
+time, same-app summaries never bridge across an idle period, and Idle always
+occupies the full timeline width.
+
+If an application is actively preventing display sleep at that threshold, the
+period is attributed to that application instead of Idle. It uses the
+application’s normal color, summarization, and overlap lane. The passive state
+is retained in the period metadata. If the assertion ends while there is still
+no input, the timeline transitions to full-width Idle.
 
 To use another data file or port:
 

@@ -84,6 +84,10 @@ function periodIsOnSelectedDay(period) {
   return localDay(new Date(period.start)) === elements.day.value;
 }
 
+function isInactiveBundle(bundleIdentifier) {
+  return bundleIdentifier === "__idle__";
+}
+
 function availableDays() {
   return [...new Set(state.periods.map(period => localDay(new Date(period.start))))]
     .sort()
@@ -136,15 +140,10 @@ function buildDisplayBlocks() {
   const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
-  const smallBlockThreshold = millisecondsPerPixel * 28;
   const ignoredBlockThreshold = millisecondsPerPixel * 3;
-  const closeGapThreshold = Math.min(
-    300_000,
-    Math.max(20_000, millisecondsPerPixel * 24)
-  );
+  const closeGapThreshold = millisecondsPerPixel * 24;
 
   const summarized = summarizeBlocksByApplication(
-    smallBlockThreshold,
     ignoredBlockThreshold,
     closeGapThreshold
   );
@@ -185,11 +184,13 @@ function summarizedDisplayBlock(rawIndices) {
 }
 
 function summarizeBlocksByApplication(
-  smallBlockThreshold,
   ignoredBlockThreshold,
   closeGapThreshold
 ) {
   const byApplication = new Map();
+  const inactiveBlocks = state.blocks.filter(
+    block => isInactiveBundle(block.bundleIdentifier)
+  );
   state.blocks.forEach((block, rawIndex) => {
     const entries = byApplication.get(block.bundleIdentifier) || [];
     entries.push({ block, rawIndex });
@@ -198,25 +199,30 @@ function summarizeBlocksByApplication(
 
   const result = [];
   for (const entries of byApplication.values()) {
+    if (isInactiveBundle(entries[0]?.block.bundleIdentifier)) {
+      entries.forEach(({ block, rawIndex }) => {
+        result.push(basicDisplayBlock(block, rawIndex));
+      });
+      continue;
+    }
+
     let index = 0;
     while (index < entries.length) {
       const current = entries[index];
       const duration = current.block.end - current.block.start;
-
-      if (duration > smallBlockThreshold) {
-        result.push(basicDisplayBlock(current.block, current.rawIndex));
-        index += 1;
-        continue;
-      }
 
       const candidates = [current];
       let cursor = index + 1;
       while (cursor < entries.length) {
         const previous = entries[cursor - 1].block;
         const next = entries[cursor].block;
-        const nextIsSmall = next.end - next.start <= smallBlockThreshold;
-        const nextIsClose = next.start - previous.end <= closeGapThreshold;
-        if (!nextIsSmall || !nextIsClose) break;
+        const crossesInactiveState = inactiveBlocks.some(inactive =>
+          inactive.start < next.start && inactive.end > previous.end
+        );
+        const nextIsClose =
+          !crossesInactiveState &&
+          next.start - previous.end <= closeGapThreshold;
+        if (!nextIsClose) break;
         candidates.push(entries[cursor]);
         cursor += 1;
       }
@@ -311,6 +317,14 @@ function assignOverlapLanes(blocks) {
   }
 
   for (const block of blocks) {
+    if (isInactiveBundle(block.bundleIdentifier)) {
+      finishComponent();
+      block.laneIndex = 0;
+      block.laneCount = 1;
+      result.push(block);
+      continue;
+    }
+
     if (component.length && block.start >= componentEnd) {
       finishComponent();
     }
@@ -370,16 +384,23 @@ function updateDisplayNode(node, block) {
   node.dataset.displayKey = block.key;
   node.classList.toggle("selected", state.selectedDisplayKey === block.key);
   node.classList.toggle("summarized", block.isSummarized);
+  node.classList.toggle("idle", block.bundleIdentifier === "__idle__");
 
   const color = block.bundleIdentifier === "__other__"
     ? "#778087"
-    : colorFor(block.bundleIdentifier);
+    : block.bundleIdentifier === "__idle__"
+      ? "#a5a19a"
+      : colorFor(block.bundleIdentifier);
+  const durationKind = block.bundleIdentifier === "__idle__"
+    ? "idle"
+    : "active";
   node.style.setProperty("--block-color", color);
   node.querySelector("strong").textContent = block.appName;
   node.querySelector("span").textContent =
-    `${formatClock(block.start)} · ${formatDuration(block.end - block.start)}`;
+    `${formatClock(block.start)} · ${formatDuration(block.activeDuration)} ${durationKind}`;
   node.title =
     `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}` +
+    `\n${formatDuration(block.activeDuration)} total ${durationKind} time` +
     (block.isSummarized ? `\nSummarized from ${block.rawIndices.length} blocks` : "");
 
   positionBlock(node, block);
@@ -519,7 +540,9 @@ function renderDetail() {
   if (block.kind === "single") {
     elements.detailAccent.style.background = block.bundleIdentifier === "__other__"
       ? "#778087"
-      : colorFor(block.bundleIdentifier);
+      : block.bundleIdentifier === "__idle__"
+        ? "#a5a19a"
+        : colorFor(block.bundleIdentifier);
     elements.detailApp.textContent = block.appName;
   } else {
     elements.detailAccent.style.background =
@@ -531,7 +554,8 @@ function renderDetail() {
   }
   elements.detailMeta.textContent =
     `${formatClock(block.start)}–${formatClock(block.end)} · ` +
-    formatDuration(block.end - block.start);
+    `${formatDuration(block.activeDuration)} ` +
+    (block.bundleIdentifier === "__idle__" ? "idle" : "active");
   elements.detailCount.textContent =
     `${periodIndices.length} ${periodIndices.length === 1 ? "period" : "periods"}`;
   elements.subactivities.replaceChildren();
@@ -544,10 +568,14 @@ function renderDetail() {
     row.className = "subactivity";
 
     const marker = document.createElement("i");
-    marker.style.background = colorFor(period.bundle_identifier);
+    marker.style.background = period.bundle_identifier === "__idle__"
+      ? "#a5a19a"
+      : colorFor(period.bundle_identifier);
     const content = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = block.bundleIdentifier === "__other__"
+    title.textContent = period.bundle_identifier === "__idle__"
+      ? "No input detected"
+      : block.bundleIdentifier === "__other__"
       ? `${period.app_name} — ${period.window_title || "No window title"}`
       : period.window_title || "No window title";
     const time = document.createElement("span");

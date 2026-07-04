@@ -20,6 +20,7 @@ DEFAULT_DATA = (
     / "activity.jsonl"
 )
 STATIC_DIRECTORY = Path(__file__).parent / "static"
+IDLE_THRESHOLD_SECONDS = 120
 
 
 def parse_timestamp(value):
@@ -126,7 +127,16 @@ class ActivityModel:
         timestamp = observation["_time"]
         self.update_interval_locked(timestamp)
         maximum_gap = max(15, self.interval * 3)
-        key = self.activity_key(observation)
+        idle_seconds = observation.get("idle_seconds", 0)
+        is_input_idle = idle_seconds >= IDLE_THRESHOLD_SECONDS
+        passive_bundle = observation.get("passive_bundle_identifier")
+        is_passive = is_input_idle and bool(passive_bundle)
+        if is_passive:
+            key = ("__passive__", passive_bundle)
+        elif is_input_idle:
+            key = ("__idle__", None)
+        else:
+            key = self.activity_key(observation)
         current = self.periods[-1] if self.periods else None
         continues = (
             current is not None
@@ -144,32 +154,77 @@ class ActivityModel:
                 current["maximum_idle_seconds"],
                 observation.get("idle_seconds", 0),
             )
-            return len(self.periods) - 1
+            return [len(self.periods) - 1]
+
+        changed_indices = []
+        start = timestamp
+        current_is_inactive = (
+            current is not None and current["_state"] in {"idle", "passive"}
+        )
+        next_is_inactive = is_input_idle
+
+        if next_is_inactive and not current_is_inactive:
+            start = timestamp - timedelta(seconds=idle_seconds)
+            if current is not None:
+                current["end"] = max(current["start"], min(current["end"], start))
+                changed_indices.append(len(self.periods) - 1)
+        elif next_is_inactive and current_is_inactive and current["_key"] != key:
+            current["end"] = max(current["start"], min(current["end"], timestamp))
+            changed_indices.append(len(self.periods) - 1)
+        elif not next_is_inactive and current_is_inactive:
+            start = timestamp - timedelta(seconds=idle_seconds)
+            current["end"] = max(current["start"], min(current["end"], start))
+            changed_indices.append(len(self.periods) - 1)
+
+        if is_passive:
+            app_name = observation.get("passive_app_name") or "Media"
+            bundle_identifier = passive_bundle
+            window_title = "Passive playback"
+            activity_state = "passive"
+        elif is_input_idle:
+            app_name = "Idle"
+            bundle_identifier = "__idle__"
+            window_title = None
+            activity_state = "idle"
+        else:
+            app_name = observation.get("app_name", "Unknown")
+            bundle_identifier = observation.get("bundle_identifier", "unknown")
+            window_title = observation.get("window_title")
+            activity_state = "active"
 
         self.periods.append(
             {
                 "_key": key,
+                "_state": activity_state,
                 "_last_sample": timestamp,
-                "start": timestamp,
+                "start": start,
                 "end": timestamp + timedelta(seconds=self.interval),
-                "app_name": observation.get("app_name", "Unknown"),
-                "bundle_identifier": observation.get("bundle_identifier", "unknown"),
-                "window_title": observation.get("window_title"),
+                "app_name": app_name,
+                "bundle_identifier": bundle_identifier,
+                "window_title": window_title,
+                "activity_state": activity_state,
+                "passive_app_name": observation.get("passive_app_name"),
+                "passive_bundle_identifier": passive_bundle,
                 "samples": 1,
-                "maximum_idle_seconds": observation.get("idle_seconds", 0),
+                "maximum_idle_seconds": idle_seconds,
             }
         )
-        return len(self.periods) - 1
+        changed_indices.append(len(self.periods) - 1)
+        return changed_indices
 
     def add_observation(self, observation):
         with self.lock:
-            index = self.add_observation_locked(observation)
-            message = {
-                "index": index,
-                "observation_count": self.observation_count,
-                "period": serialize_period(self.periods[index]),
-            }
-        self.broadcast("period", message)
+            changed_indices = self.add_observation_locked(observation)
+            messages = [
+                {
+                    "index": index,
+                    "observation_count": self.observation_count,
+                    "period": serialize_period(self.periods[index]),
+                }
+                for index in changed_indices
+            ]
+        for message in messages:
+            self.broadcast("period", message)
 
     def snapshot(self):
         with self.lock:

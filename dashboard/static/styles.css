@@ -209,6 +209,10 @@ button { cursor: pointer; }
   z-index: 3;
 }
 
+.activity-block.idle {
+  z-index: 2;
+}
+
 .activity-block.continues-before {
   border-top-left-radius: 1px;
   border-top-right-radius: 1px;
