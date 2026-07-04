@@ -81,7 +81,11 @@ function colorFor(bundleIdentifier) {
 }
 
 function periodIsOnSelectedDay(period) {
-  return localDay(new Date(period.start)) === elements.day.value;
+  const bounds = dayBounds(elements.day.value);
+  return (
+    new Date(period.end).getTime() > bounds.start &&
+    new Date(period.start).getTime() < bounds.end
+  );
 }
 
 function isInactiveBundle(bundleIdentifier) {
@@ -111,11 +115,12 @@ function syncDayOptions() {
 
 function buildBlocks() {
   state.blocks = [];
+  const bounds = dayBounds(elements.day.value);
 
   state.periods.forEach((period, periodIndex) => {
     if (!periodIsOnSelectedDay(period)) return;
-    const start = new Date(period.start).getTime();
-    const end = new Date(period.end).getTime();
+    const start = Math.max(new Date(period.start).getTime(), bounds.start);
+    const end = Math.min(new Date(period.end).getTime(), bounds.end);
     const previous = state.blocks[state.blocks.length - 1];
     const continues = previous
       && previous.bundleIdentifier === period.bundle_identifier
@@ -187,25 +192,25 @@ function summarizeBlocksByApplication(
   ignoredBlockThreshold,
   closeGapThreshold
 ) {
+  const idleNormalization = normalizeIdleBlocks(ignoredBlockThreshold);
   const byApplication = new Map();
   const inactiveBlocks = state.blocks.filter(
     block => isInactiveBundle(block.bundleIdentifier)
   );
   state.blocks.forEach((block, rawIndex) => {
+    if (
+      block.bundleIdentifier === "__idle__" ||
+      idleNormalization.suppressedRawIndices.has(rawIndex)
+    ) {
+      return;
+    }
     const entries = byApplication.get(block.bundleIdentifier) || [];
     entries.push({ block, rawIndex });
     byApplication.set(block.bundleIdentifier, entries);
   });
 
-  const result = [];
+  const result = [...idleNormalization.displayBlocks];
   for (const entries of byApplication.values()) {
-    if (isInactiveBundle(entries[0]?.block.bundleIdentifier)) {
-      entries.forEach(({ block, rawIndex }) => {
-        result.push(basicDisplayBlock(block, rawIndex));
-      });
-      continue;
-    }
-
     let index = 0;
     while (index < entries.length) {
       const current = entries[index];
@@ -241,6 +246,57 @@ function summarizeBlocksByApplication(
   return result.sort((left, right) =>
     left.start - right.start || left.end - right.end
   );
+}
+
+function normalizeIdleBlocks(ignoredBlockThreshold) {
+  const displayBlocks = [];
+  const suppressedRawIndices = new Set();
+  const idleIndices = state.blocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => block.bundleIdentifier === "__idle__");
+  let cursor = 0;
+
+  while (cursor < idleIndices.length) {
+    const first = idleIndices[cursor];
+    const grouped = [first];
+    let groupEnd = first.block.end;
+    let nextCursor = cursor + 1;
+
+    while (nextCursor < idleIndices.length) {
+      const next = idleIndices[nextCursor];
+      if (next.block.start - groupEnd > 15_000) break;
+
+      const previousIndex = grouped[grouped.length - 1].index;
+      for (let index = previousIndex + 1; index < next.index; index += 1) {
+        suppressedRawIndices.add(index);
+      }
+      grouped.push(next);
+      groupEnd = Math.max(groupEnd, next.block.end);
+      nextCursor += 1;
+    }
+
+    const start = grouped[0].block.start;
+    const end = Math.max(...grouped.map(({ block }) => block.end));
+    if (end - start >= ignoredBlockThreshold) {
+      displayBlocks.push({
+        kind: "single",
+        key: `idle:${grouped.map(({ index }) => index).join(":")}`,
+        rawIndices: grouped.map(({ index }) => index),
+        start,
+        end,
+        appName: "Idle",
+        bundleIdentifier: "__idle__",
+        activeDuration: grouped.reduce(
+          (total, { block }) => total + block.end - block.start,
+          0
+        ),
+        isSummarized: grouped.length > 1
+      });
+    }
+    cursor = nextCursor;
+  }
+
+  return { displayBlocks, suppressedRawIndices };
 }
 
 function assignOverlapLanes(blocks) {

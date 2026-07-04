@@ -45,6 +45,7 @@ class ActivityModel:
         self.observation_count = 0
         self.interval = 5
         self.recent_times = []
+        self.last_observation_time = None
         self.subscribers = set()
         self.file_offset = 0
         self.partial_line = b""
@@ -86,6 +87,7 @@ class ActivityModel:
             self.periods = []
             self.observation_count = 0
             self.recent_times = []
+            self.last_observation_time = None
             self.interval = statistics.median(normal_gaps) if normal_gaps else 5
             for observation in observations:
                 self.add_observation_locked(observation)
@@ -125,12 +127,69 @@ class ActivityModel:
 
     def add_observation_locked(self, observation):
         timestamp = observation["_time"]
+        expected_interval = self.interval
+        previous_observation_time = self.last_observation_time
         self.update_interval_locked(timestamp)
+        self.last_observation_time = timestamp
         maximum_gap = max(15, self.interval * 3)
         idle_seconds = observation.get("idle_seconds", 0)
-        is_input_idle = idle_seconds >= IDLE_THRESHOLD_SECONDS
+        is_loginwindow = (
+            observation.get("bundle_identifier") == "com.apple.loginwindow"
+            or observation.get("app_name", "").lower() == "loginwindow"
+        )
+        is_input_idle = (
+            idle_seconds >= IDLE_THRESHOLD_SECONDS or is_loginwindow
+        )
         passive_bundle = observation.get("passive_bundle_identifier")
-        is_passive = is_input_idle and bool(passive_bundle)
+        is_passive = (
+            not is_loginwindow
+            and idle_seconds >= IDLE_THRESHOLD_SECONDS
+            and bool(passive_bundle)
+        )
+
+        changed_indices = []
+        missing_gap_threshold = max(15, expected_interval * 3)
+        if (
+            previous_observation_time is not None
+            and (timestamp - previous_observation_time).total_seconds()
+                > missing_gap_threshold
+            and self.periods
+        ):
+            gap_start = min(
+                timestamp,
+                previous_observation_time + timedelta(seconds=expected_interval),
+            )
+            gap_duration = max(0, (timestamp - gap_start).total_seconds())
+            previous = self.periods[-1]
+
+            if previous["_state"] == "idle":
+                previous["end"] = timestamp
+                previous["_last_sample"] = timestamp
+                previous["maximum_idle_seconds"] = max(
+                    previous["maximum_idle_seconds"],
+                    gap_duration,
+                )
+                changed_indices.append(len(self.periods) - 1)
+            elif gap_duration > 0:
+                self.periods.append(
+                    {
+                        "_key": ("__idle__", None),
+                        "_state": "idle",
+                        "_last_sample": timestamp,
+                        "start": gap_start,
+                        "end": timestamp,
+                        "app_name": "Idle",
+                        "bundle_identifier": "__idle__",
+                        "window_title": None,
+                        "activity_state": "idle",
+                        "passive_app_name": None,
+                        "passive_bundle_identifier": None,
+                        "samples": 0,
+                        "maximum_idle_seconds": gap_duration,
+                    }
+                )
+                changed_indices.append(len(self.periods) - 1)
+
         if is_passive:
             key = ("__passive__", passive_bundle)
         elif is_input_idle:
@@ -154,9 +213,9 @@ class ActivityModel:
                 current["maximum_idle_seconds"],
                 observation.get("idle_seconds", 0),
             )
-            return [len(self.periods) - 1]
+            changed_indices.append(len(self.periods) - 1)
+            return list(dict.fromkeys(changed_indices))
 
-        changed_indices = []
         start = timestamp
         current_is_inactive = (
             current is not None and current["_state"] in {"idle", "passive"}
@@ -164,7 +223,11 @@ class ActivityModel:
         next_is_inactive = is_input_idle
 
         if next_is_inactive and not current_is_inactive:
-            start = timestamp - timedelta(seconds=idle_seconds)
+            start = (
+                timestamp - timedelta(seconds=idle_seconds)
+                if idle_seconds >= IDLE_THRESHOLD_SECONDS
+                else timestamp
+            )
             if current is not None:
                 current["end"] = max(current["start"], min(current["end"], start))
                 changed_indices.append(len(self.periods) - 1)
@@ -210,7 +273,7 @@ class ActivityModel:
             }
         )
         changed_indices.append(len(self.periods) - 1)
-        return changed_indices
+        return list(dict.fromkeys(changed_indices))
 
     def add_observation(self, observation):
         with self.lock:

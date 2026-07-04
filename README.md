@@ -68,39 +68,155 @@ For dashboard development, it can also be run independently:
 python3 dashboard/server.py
 ```
 
-Open <http://127.0.0.1:8765>. On startup, the server reads the existing JSONL
-file and groups consecutive observations with the same application and window
-title into activity periods. It then tails only newly appended bytes and streams
-period changes to the page. The browser updates only the affected timeline block
-and row; it does not reload or repeatedly process the full file.
+Open <http://127.0.0.1:8765>.
 
-The timeline initially fits the available activity and runs vertically from
-earlier to later. Use the buttons to zoom, fit the observed data, or return to a
-full-day view. Scrolling over the timeline zooms around the pointer, and dragging
-empty timeline space pans vertically. Clicking an application block opens its
-window-title subactivities in the detail pane.
+### How the timeline is prepared
 
-At wider zoom levels, nearby periods from the same application are summarized
-into a larger time span regardless of their individual duration. Isolated
-periods below roughly three rendered pixels are omitted. After summarization,
-overlapping application spans share equal-width lanes. Up to three applications
-are named directly; additional overlapping applications are represented by a
-fourth **Other** lane. Zooming in reduces the proximity window and restores the
-underlying periods. A summarized block spans from its first start to its last
-end, but its displayed active time is the sum of its constituent periods rather
-than the full enclosing span.
+The JSONL file remains the source of truth. The timeline is a derived view
+created in two stages: the server reconstructs periods from observations, then
+the browser adapts those periods to the selected day and current zoom level.
 
-After two minutes without keyboard or pointer input, the dashboard
-retroactively ends the foreground-app block at the last input time and shows a
-separate gray **Idle** block. Idle time is not included in application active
-time, same-app summaries never bridge across an idle period, and Idle always
-occupies the full timeline width.
+#### 1. Reconstruct periods on the server
 
-If an application is actively preventing display sleep at that threshold, the
-period is attributed to that application instead of Idle. It uses the
-application’s normal color, summarization, and overlap lane. The passive state
-is retained in the period metadata. If the assertion ends while there is still
-no input, the timeline transitions to full-width Idle.
+On startup, the server reads and orders every valid JSONL observation. It
+infers the normal sampling interval from recent gaps of at most 60 seconds,
+falling back to five seconds when necessary.
+
+Observations continue the same server period when they have the same application
+bundle identifier and window title and arrive within the larger of:
+
+- 15 seconds
+- three inferred sampling intervals
+
+Otherwise, the previous period closes and a new one begins. Periods preserve
+their application, window title, sample count, maximum input-idle value, and
+activity state.
+
+#### 2. Reconstruct Idle and passive activity
+
+The server derives state boundaries rather than charging every sample to its
+foreground application:
+
+- After two minutes without keyboard or pointer input, the preceding app period
+  is retroactively trimmed to the last input timestamp.
+- If no relevant display-sleep assertion exists, the remaining time becomes
+  **Idle**.
+- Every `loginwindow` observation is **Idle**, regardless of its idle counter.
+- A missing-data gap becomes **Idle** when it exceeds the larger of 15 seconds
+  or three expected sample intervals. The gap begins one expected interval
+  after the preceding observation. Only gaps between known observations can be
+  reconstructed.
+- If an app is preventing display sleep, the period is attributed to that app
+  using its real name and bundle identifier. Its metadata records
+  `activity_state: passive`, but it is displayed and summarized like ordinary
+  activity.
+- If a passive assertion ends while no input occurs, the state changes from the
+  attributed app to Idle. New input ends either state at the estimated input
+  timestamp.
+
+Historical observations recorded before passive assertion fields existed cannot
+reliably distinguish playback from genuine Idle.
+
+#### 3. Build application blocks for the selected day
+
+The browser includes every server period that overlaps the selected local day
+and clips periods at midnight when they cross a day boundary.
+
+It first creates base application blocks. Adjacent server periods from the same
+bundle are combined when their gap is at most 20 seconds. This removes
+window-title fragmentation while retaining the original periods for the detail
+pane.
+
+#### 4. Normalize Idle for display
+
+Idle is treated as a hard timeline boundary:
+
+- Idle spans separated by at most 15 seconds are joined visually.
+- Activity fragments between those joined Idle spans are suppressed from the
+  display.
+- An isolated Idle span smaller than three rendered pixels is hidden.
+- Idle never merges with an application, never participates in overlap lanes,
+  and always occupies the full timeline width.
+
+These operations only affect presentation. Source observations and reconstructed
+server periods remain available.
+
+#### 5. Apply zoom-dependent application summarization
+
+The visible timeline determines a time-per-pixel scale:
+
+```text
+milliseconds per pixel = visible time span / timeline track height
+```
+
+For each application independently, blocks merge when the time between them is
+no more than exactly **24 pixels** at the current zoom level. Individual block
+duration does not affect eligibility. Application blocks never merge across an
+Idle span.
+
+An isolated application block smaller than **3 pixels** is hidden. Zooming in
+therefore separates blocks and reveals small fragments; zooming out combines
+nearby work into longer summaries.
+
+A summarized block has two different duration concepts:
+
+- Its visual span runs from the first constituent block’s start to the final
+  constituent block’s end.
+- Its displayed active time is the sum of constituent block durations, excluding
+  gaps enclosed by that visual span.
+
+#### 6. Assign overlap lanes
+
+After summarization, temporally overlapping blocks form connected overlap
+regions. Applications in a region receive equal-width, side-by-side lanes.
+Lane order follows each application’s first appearance in that region.
+
+At most four lanes are displayed:
+
+- With four or fewer applications, every application receives a lane.
+- With more than four, the three applications with the greatest summed active
+  duration remain explicit.
+- All remaining applications are combined into a fourth **Other** lane.
+
+Idle ends the current overlap region and remains full width.
+
+#### 7. Draw and inspect blocks
+
+Time runs vertically from earlier to later. Application colors are assigned by
+bundle identifier for the current browser session; Idle and Other use neutral
+colors.
+
+Application names appear when a block is at least approximately 30 pixels tall.
+Additional timing text appears at approximately 54 pixels. Hover text remains
+available for smaller blocks.
+
+Clicking a block opens the detail pane. The pane lists the original
+window-title periods represented by that block. Clicking Other exposes periods
+from all applications grouped into it.
+
+### Navigating the timeline
+
+- **Fit** frames the available activity with a small amount of padding.
+- **Day** displays midnight to midnight.
+- **+** and **−** zoom around the center.
+- Scrolling over the timeline zooms around the pointer.
+- Dragging empty timeline space pans vertically.
+- The minimum viewport is one minute.
+- After manually zooming or panning, live updates do not reset that viewport.
+  When live-edge following is active, the view advances as new activity reaches
+  its lower boundary.
+
+### Live updates
+
+The server reads the complete JSONL file only at startup. It then checks for file
+growth every 500 milliseconds and reads only newly appended bytes. New
+observations update the in-memory period model and are sent to connected pages
+using Server-Sent Events.
+
+The browser receives an initial snapshot followed by period updates. It
+recomputes zoom-dependent summaries and overlap lanes, but reconciles timeline
+elements by stable keys instead of reloading the page or recreating every
+unchanged DOM node. The stream automatically reconnects if interrupted.
 
 To use another data file or port:
 
