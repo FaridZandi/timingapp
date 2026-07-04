@@ -2,11 +2,15 @@
 
 import argparse
 import json
+import os
 import queue
 import statistics
 import threading
 import time
-from datetime import datetime, timedelta
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -21,6 +25,8 @@ DEFAULT_DATA = (
 )
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 IDLE_THRESHOLD_SECONDS = 120
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+MAX_CALENDAR_REQUEST_BYTES = 64 * 1024
 
 
 def parse_timestamp(value):
@@ -35,6 +41,151 @@ def serialize_period(period):
         for key, value in period.items()
         if not key.startswith("_")
     }
+
+
+class CalendarExportError(Exception):
+    pass
+
+
+def extract_response_text(response):
+    for item in response.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            if content.get("type") == "output_text":
+                return content.get("text", "")
+    raise CalendarExportError("The summarization service returned no text.")
+
+
+def summarize_activity(activity, api_key):
+    periods = activity.get("periods")
+    if not isinstance(periods, list):
+        raise CalendarExportError("Activity periods are missing.")
+
+    details = []
+    seen = set()
+    for period in periods[:100]:
+        if not isinstance(period, dict):
+            continue
+        title = str(period.get("window_title") or "").strip()
+        app_name = str(period.get("app_name") or "").strip()
+        if not title:
+            continue
+        detail = "{} — {}".format(app_name, title) if app_name else title
+        detail = detail[:300]
+        if detail not in seen:
+            details.append(detail)
+            seen.add(detail)
+
+    prompt_input = {
+        "application": str(activity.get("app_name") or "Activity")[:120],
+        "active_minutes": round(
+            max(0, float(activity.get("active_duration_ms") or 0)) / 60000,
+            1,
+        ),
+        "window_titles": details[:60],
+    }
+    body = {
+        "model": os.environ.get("OPENAI_SUMMARY_MODEL", "gpt-5.4-mini"),
+        "instructions": (
+            "Create a factual calendar entry from computer activity window titles. "
+            "Do not invent projects, people, outcomes, or intent. Produce a concise "
+            "3-8 word title and a one- or two-sentence description. Ignore repetitive "
+            "UI suffixes and filenames when they do not add meaning."
+        ),
+        "input": json.dumps(prompt_input, ensure_ascii=False),
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "activity_calendar_event",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["title", "description"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "max_output_tokens": 300,
+        "store": False,
+    }
+    request = urllib.request.Request(
+        OPENAI_RESPONSES_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer {}".format(api_key),
+            "Content-Type": "application/json",
+            "User-Agent": "ActivityProbe/0.1",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            payload = json.load(error)
+            message = payload.get("error", {}).get("message")
+        except (json.JSONDecodeError, AttributeError):
+            message = None
+        raise CalendarExportError(
+            message or "The summarization service returned HTTP {}.".format(error.code)
+        ) from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise CalendarExportError(
+            "Could not reach the summarization service."
+        ) from error
+
+    try:
+        summary = json.loads(extract_response_text(result))
+        title = str(summary["title"]).strip()
+        description = str(summary["description"]).strip()
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise CalendarExportError(
+            "The summarization service returned an invalid summary."
+        ) from error
+
+    if not title:
+        raise CalendarExportError("The summarization service returned an empty title.")
+    return {"title": title[:160], "description": description[:1200]}
+
+
+def google_calendar_url(activity, summary):
+    try:
+        start = parse_timestamp(activity["start"])
+        end = parse_timestamp(activity["end"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise CalendarExportError("The activity has invalid start or end times.") from error
+    if end <= start:
+        raise CalendarExportError("The activity end must be after its start.")
+
+    active_minutes = round(
+        max(0, float(activity.get("active_duration_ms") or 0)) / 60000,
+        1,
+    )
+    description = summary["description"]
+    if active_minutes:
+        description += "\n\nActivity Probe active time: {} minutes.".format(
+            active_minutes
+        )
+
+    def calendar_time(value):
+        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    query = urllib.parse.urlencode(
+        {
+            "action": "TEMPLATE",
+            "text": summary["title"],
+            "dates": "{}/{}".format(calendar_time(start), calendar_time(end)),
+            "details": description,
+        }
+    )
+    return "https://calendar.google.com/calendar/render?{}".format(query)
 
 
 class ActivityModel:
@@ -376,9 +527,60 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         super().do_GET()
 
-    def send_json(self, value):
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path != "/api/calendar/google":
+            self.send_error(404)
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+        if content_length <= 0 or content_length > MAX_CALENDAR_REQUEST_BYTES:
+            self.send_json({"error": "Invalid request size."}, status=400)
+            return
+
+        try:
+            activity = json.loads(self.rfile.read(content_length))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json({"error": "Invalid JSON request."}, status=400)
+            return
+        if not isinstance(activity, dict):
+            self.send_json({"error": "Invalid activity request."}, status=400)
+            return
+
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            self.send_json(
+                {
+                    "error": (
+                        "No OpenAI API key is configured. Add one from the "
+                        "Activity Probe menu-bar menu."
+                    )
+                },
+                status=503,
+            )
+            return
+
+        try:
+            summary = summarize_activity(activity, api_key)
+            calendar_url = google_calendar_url(activity, summary)
+        except CalendarExportError as error:
+            self.send_json({"error": str(error)}, status=502)
+            return
+
+        self.send_json(
+            {
+                "calendar_url": calendar_url,
+                "title": summary["title"],
+                "description": summary["description"],
+            }
+        )
+
+    def send_json(self, value, status=200):
         body = json.dumps(value, separators=(",", ":")).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")

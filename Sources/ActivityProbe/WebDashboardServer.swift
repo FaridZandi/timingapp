@@ -27,6 +27,14 @@ final class WebDashboardServer {
         self.process = nil
     }
 
+    func configurationDidChange() {
+        guard process?.isRunning == true else { return }
+        stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.start()
+        }
+    }
+
     private func start() {
         guard let scriptURL = serverScriptURL() else {
             showError("The bundled dashboard server could not be found.")
@@ -36,6 +44,13 @@ final class WebDashboardServer {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = [scriptURL.path]
+        var environment = ProcessInfo.processInfo.environment
+        if let key = APIKeyStore.openAIKey() {
+            environment["OPENAI_API_KEY"] = key
+        } else {
+            environment.removeValue(forKey: "OPENAI_API_KEY")
+        }
+        process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
 

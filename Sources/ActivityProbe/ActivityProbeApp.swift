@@ -73,6 +73,10 @@ struct ActivityMenu: View {
             NSWorkspace.shared.activateFileViewerSelecting([model.dataFileURL])
         }
 
+        Button(APIKeyStore.hasOpenAIKey ? "OpenAI API Key… ✓" : "OpenAI API Key…") {
+            APIKeyWindowController.shared.show()
+        }
+
         Divider()
 
         Button("Settings…") {
@@ -87,6 +91,41 @@ struct ActivityMenu: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+}
+
+@MainActor
+final class APIKeyWindowController {
+    static let shared = APIKeyWindowController()
+
+    private init() {}
+
+    func show() {
+        let field = NSSecureTextField(
+            frame: NSRect(x: 0, y: 0, width: 360, height: 24)
+        )
+        field.placeholderString = APIKeyStore.hasOpenAIKey
+            ? "A key is already saved; enter a replacement"
+            : "sk-…"
+
+        let alert = NSAlert()
+        alert.messageText = "OpenAI API Key"
+        alert.informativeText =
+            "The key is stored in macOS Keychain and passed only to the " +
+            "local dashboard server. Leave the field empty to remove it."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            try APIKeyStore.saveOpenAIKey(field.stringValue)
+            WebDashboardServer.shared.configurationDidChange()
+        } catch {
+            let errorAlert = NSAlert(error: error)
+            errorAlert.runModal()
+        }
     }
 }
 

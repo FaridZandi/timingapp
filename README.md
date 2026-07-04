@@ -218,6 +218,44 @@ recomputes zoom-dependent summaries and overlap lanes, but reconciles timeline
 elements by stable keys instead of reloading the page or recreating every
 unchanged DOM node. The stream automatically reconnects if interrupted.
 
+### Google Calendar export
+
+Non-Idle blocks expose **Add to Google Calendar** in the detail pane. The export
+uses the selected display block’s enclosing start and end times, summed active
+duration, application name, and original window-title periods.
+
+The workflow is:
+
+1. Activity details are sent from the browser to the local dashboard server.
+2. The server sends the application name, active minutes, and up to 60 unique
+   window-title details to the OpenAI Responses API.
+3. `gpt-5.4-mini` returns a structured calendar title and short factual
+   description.
+4. The server creates a prefilled Google Calendar event URL.
+5. The timeline shows progress while waiting, then its current browser tab
+   navigates to Google Calendar for review and saving.
+
+The server does not insert an event directly and receives no Google account
+credentials. The event’s calendar duration uses the block’s visual start and
+end; its description includes the summed active time, which may be shorter when
+the block summarizes activity separated by gaps.
+
+Configure the OpenAI key from the Activity Probe menu-bar item under
+**OpenAI API Key…**. The key is stored in macOS Keychain, is never sent to the
+dashboard browser, and is passed to the bundled local server through its process
+environment. Window titles are sent to OpenAI only after the calendar button is
+clicked. OpenAI authenticates server requests using bearer API keys; keys should
+not be exposed in browser code. See the
+[OpenAI API authentication documentation](https://platform.openai.com/docs/api-reference/introduction)
+and [Responses structured-output reference](https://platform.openai.com/docs/api-reference/responses).
+
+When running the development server independently, provide the key in its
+environment:
+
+```sh
+OPENAI_API_KEY="…" python3 dashboard/server.py
+```
+
 To use another data file or port:
 
 ```sh

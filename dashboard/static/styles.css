@@ -111,6 +111,37 @@ button { cursor: pointer; }
   margin-top: 3px;
 }
 
+.calendar-button {
+  background: #20272b;
+  border-color: #20272b;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  margin: 18px 0 0;
+  padding: 9px 12px;
+}
+
+.calendar-button:hover:not(:disabled) {
+  background: #353e43;
+}
+
+.calendar-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.calendar-status {
+  color: #747d82;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 8px;
+  min-height: 16px;
+}
+
+.calendar-status.error {
+  color: #a23b32;
+}
+
 .timeline-controls { gap: 5px; }
 
 .timeline-controls button {

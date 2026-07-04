@@ -4,8 +4,10 @@ const palette = [
 ];
 
 const elements = {
+  addGoogleCalendar: document.querySelector("#add-google-calendar"),
   axis: document.querySelector("#axis"),
   blocks: document.querySelector("#blocks"),
+  calendarStatus: document.querySelector("#calendar-status"),
   day: document.querySelector("#day"),
   detail: document.querySelector("#detail"),
   detailAccent: document.querySelector("#detail-accent"),
@@ -585,6 +587,7 @@ function renderDetail() {
   if (!block) {
     elements.detailEmpty.hidden = false;
     elements.detailContent.hidden = true;
+    elements.calendarStatus.textContent = "";
     return;
   }
 
@@ -614,6 +617,12 @@ function renderDetail() {
     (block.bundleIdentifier === "__idle__" ? "idle" : "active");
   elements.detailCount.textContent =
     `${periodIndices.length} ${periodIndices.length === 1 ? "period" : "periods"}`;
+  elements.addGoogleCalendar.disabled = block.bundleIdentifier === "__idle__";
+  elements.addGoogleCalendar.textContent = block.bundleIdentifier === "__idle__"
+    ? "Idle cannot be added"
+    : "Add to Google Calendar";
+  elements.calendarStatus.textContent = "";
+  elements.calendarStatus.classList.remove("error");
   elements.subactivities.replaceChildren();
 
   for (const periodIndex of periodIndices) {
@@ -640,6 +649,63 @@ function renderDetail() {
     content.append(title, time);
     row.append(marker, content);
     elements.subactivities.append(row);
+  }
+}
+
+function selectedCalendarActivity() {
+  const block = state.displayBlocks.find(
+    candidate => candidate.key === state.selectedDisplayKey
+  );
+  if (!block || block.bundleIdentifier === "__idle__") return null;
+
+  const rawBlocks = block.rawIndices.map(index => state.blocks[index]);
+  const periodIndices = rawBlocks.flatMap(rawBlock => rawBlock.periodIndices);
+  return {
+    app_name: block.appName,
+    bundle_identifier: block.bundleIdentifier,
+    start: new Date(block.start).toISOString(),
+    end: new Date(block.end).toISOString(),
+    active_duration_ms: block.activeDuration,
+    periods: periodIndices.map(index => {
+      const period = state.periods[index];
+      return {
+        app_name: period.app_name,
+        window_title: period.window_title,
+        start: period.start,
+        end: period.end
+      };
+    })
+  };
+}
+
+async function addSelectedActivityToGoogleCalendar() {
+  const activity = selectedCalendarActivity();
+  if (!activity) return;
+
+  elements.addGoogleCalendar.disabled = true;
+  elements.addGoogleCalendar.textContent = "Summarizing…";
+  elements.calendarStatus.textContent =
+    "Window titles are being summarized by OpenAI.";
+  elements.calendarStatus.classList.remove("error");
+
+  try {
+    const response = await fetch("/api/calendar/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(activity)
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || `Calendar request failed (${response.status}).`);
+    }
+    elements.calendarStatus.textContent = `Prepared “${result.title}”.`;
+    window.location.assign(result.calendar_url);
+  } catch (error) {
+    elements.calendarStatus.textContent = error.message;
+    elements.calendarStatus.classList.add("error");
+  } finally {
+    elements.addGoogleCalendar.disabled = false;
+    elements.addGoogleCalendar.textContent = "Add to Google Calendar";
   }
 }
 
@@ -768,6 +834,10 @@ elements.blocks.addEventListener("click", event => {
   const block = event.target.closest(".activity-block");
   if (block) selectBlock(block.dataset.displayKey);
 });
+elements.addGoogleCalendar.addEventListener(
+  "click",
+  addSelectedActivityToGoogleCalendar
+);
 elements.day.addEventListener("change", renderSelectedDay);
 elements.fitActivity.addEventListener("click", () => fitActivity());
 elements.fullDay.addEventListener("click", showFullDay);
