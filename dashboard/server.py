@@ -364,8 +364,10 @@ class ActivityModel:
                 gaps = [
                     (current - previous).total_seconds()
                     for previous, current in zip(self.recent_times, self.recent_times[1:])
+                    if 0 < (current - previous).total_seconds() <= 60
                 ]
-                self.interval = statistics.median(gaps)
+                if gaps:
+                    self.interval = statistics.median(gaps)
                 return
         self.recent_times.append(timestamp)
         self.recent_times = self.recent_times[-21:]
