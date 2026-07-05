@@ -22,6 +22,10 @@ const elements = {
   refresh: document.querySelector("#refresh"),
   status: document.querySelector("#status"),
   subactivities: document.querySelector("#subactivities"),
+  summaryAppCount: document.querySelector("#summary-app-count"),
+  summaryApps: document.querySelector("#summary-apps"),
+  summaryDate: document.querySelector("#summary-date"),
+  summaryMetrics: document.querySelector("#summary-metrics"),
   timeline: document.querySelector("#timeline"),
   total: document.querySelector("#total"),
   zoomIn: document.querySelector("#zoom-in"),
@@ -580,6 +584,168 @@ function renderSummary() {
     `${state.displayBlocks.length} visible blocks · ${formatDuration(observed)} observed`;
 }
 
+function mergedIntervalDuration(intervals) {
+  if (!intervals.length) return 0;
+  const sorted = intervals
+    .map(interval => ({ ...interval }))
+    .sort((left, right) => left.start - right.start);
+  let total = 0;
+  let start = sorted[0].start;
+  let end = sorted[0].end;
+
+  for (const interval of sorted.slice(1)) {
+    if (interval.start <= end) {
+      end = Math.max(end, interval.end);
+    } else {
+      total += end - start;
+      start = interval.start;
+      end = interval.end;
+    }
+  }
+  return total + end - start;
+}
+
+function selectedDayPeriods() {
+  const bounds = dayBounds(elements.day.value);
+  return state.periods
+    .filter(periodIsOnSelectedDay)
+    .map(period => ({
+      ...period,
+      clippedStart: Math.max(new Date(period.start).getTime(), bounds.start),
+      clippedEnd: Math.min(new Date(period.end).getTime(), bounds.end)
+    }))
+    .filter(period => period.clippedEnd > period.clippedStart)
+    .sort((left, right) => left.clippedStart - right.clippedStart);
+}
+
+function addSummaryMetric(value, label) {
+  const metric = document.createElement("div");
+  metric.className = "summary-metric";
+  const number = document.createElement("strong");
+  number.textContent = value;
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  metric.append(number, caption);
+  elements.summaryMetrics.append(metric);
+}
+
+function renderDailySummary() {
+  const periods = selectedDayPeriods();
+  const activePeriods = periods.filter(
+    period => period.bundle_identifier !== "__idle__"
+  );
+  const idlePeriods = periods.filter(
+    period => period.bundle_identifier === "__idle__"
+  );
+  const activeDuration = mergedIntervalDuration(
+    activePeriods.map(period => ({
+      start: period.clippedStart,
+      end: period.clippedEnd
+    }))
+  );
+  const idleDuration = mergedIntervalDuration(
+    idlePeriods.map(period => ({
+      start: period.clippedStart,
+      end: period.clippedEnd
+    }))
+  );
+
+  const applications = new Map();
+  for (const period of activePeriods) {
+    const entry = applications.get(period.bundle_identifier) || {
+      appName: period.app_name,
+      bundleIdentifier: period.bundle_identifier,
+      intervals: []
+    };
+    entry.intervals.push({
+      start: period.clippedStart,
+      end: period.clippedEnd
+    });
+    applications.set(period.bundle_identifier, entry);
+  }
+  const appRows = [...applications.values()]
+    .map(app => ({
+      ...app,
+      duration: mergedIntervalDuration(app.intervals)
+    }))
+    .sort((left, right) => right.duration - left.duration);
+
+  let switches = 0;
+  let previousBundle = null;
+  for (const period of activePeriods) {
+    if (
+      previousBundle !== null &&
+      period.bundle_identifier !== previousBundle
+    ) {
+      switches += 1;
+    }
+    previousBundle = period.bundle_identifier;
+  }
+
+  elements.summaryDate.textContent = elements.day.selectedOptions[0]?.textContent || "";
+  elements.summaryMetrics.replaceChildren();
+  addSummaryMetric(formatDuration(activeDuration), "Active time");
+  addSummaryMetric(formatDuration(idleDuration), "Idle time");
+  addSummaryMetric(appRows.length.toLocaleString(), "Applications");
+  addSummaryMetric(switches.toLocaleString(), "App switches");
+
+  elements.summaryAppCount.textContent =
+    `${appRows.length} ${appRows.length === 1 ? "application" : "applications"}`;
+  elements.summaryApps.replaceChildren();
+
+  if (!appRows.length) {
+    const empty = document.createElement("p");
+    empty.className = "summary-empty";
+    empty.textContent = "No application activity for this day.";
+    elements.summaryApps.append(empty);
+    return;
+  }
+
+  for (const app of appRows) {
+    const percentage = activeDuration > 0
+      ? Math.min(100, app.duration / activeDuration * 100)
+      : 0;
+    const row = document.createElement("div");
+    row.className = "summary-app-row";
+
+    const label = document.createElement("div");
+    label.className = "summary-app-label";
+    const icon = document.createElement("img");
+    icon.className = "summary-app-icon";
+    icon.alt = "";
+    icon.src =
+      `/api/app-icon?bundle_id=${encodeURIComponent(app.bundleIdentifier)}`;
+    const marker = document.createElement("i");
+    marker.style.background = colorFor(app.bundleIdentifier);
+    marker.hidden = true;
+    icon.addEventListener("error", () => {
+      icon.hidden = true;
+      marker.hidden = false;
+    });
+    const name = document.createElement("strong");
+    name.textContent = app.appName;
+    label.append(icon, marker, name);
+
+    const bar = document.createElement("div");
+    bar.className = "summary-app-bar";
+    const fill = document.createElement("i");
+    fill.style.background = colorFor(app.bundleIdentifier);
+    fill.style.width = `${percentage}%`;
+    bar.append(fill);
+
+    const value = document.createElement("div");
+    value.className = "summary-app-value";
+    const duration = document.createElement("span");
+    duration.textContent = formatDuration(app.duration);
+    const percent = document.createElement("small");
+    percent.textContent = `${Math.round(percentage)}%`;
+    value.append(duration, percent);
+
+    row.append(label, bar, value);
+    elements.summaryApps.append(row);
+  }
+}
+
 function renderDetail() {
   const block = state.displayBlocks.find(
     candidate => candidate.key === state.selectedDisplayKey
@@ -727,6 +893,7 @@ function renderSelectedDay() {
   renderDisplayBlocks();
   renderAxis();
   renderSummary();
+  renderDailySummary();
   renderDetail();
 }
 
@@ -794,6 +961,7 @@ function applyPeriodChange(change) {
   renderDisplayBlocks();
   if (state.selectedDisplayKey) renderDetail();
   renderSummary();
+  renderDailySummary();
 
   const changedEnd = new Date(change.period.end).getTime();
   if (state.followingLiveEdge && changedEnd > state.viewportEnd) {

@@ -389,8 +389,138 @@ button { cursor: pointer; }
   margin-top: 3px;
 }
 
+.daily-summary {
+  margin-top: 18px;
+  padding: 24px;
+}
+
+.summary-header,
+.summary-breakdown-heading,
+.summary-app-row,
+.summary-app-label,
+.summary-app-value {
+  align-items: center;
+  display: flex;
+}
+
+.summary-header,
+.summary-breakdown-heading,
+.summary-app-row {
+  justify-content: space-between;
+}
+
+.summary-date,
+.summary-breakdown-heading span {
+  color: #747d82;
+  font-size: 12px;
+}
+
+.summary-metrics {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 22px 0 28px;
+}
+
+.summary-metric {
+  background: #f7f6f3;
+  border: 1px solid #e9e6e0;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.summary-metric strong,
+.summary-metric span {
+  display: block;
+}
+
+.summary-metric strong {
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.summary-metric span {
+  color: #747d82;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.summary-breakdown-heading {
+  border-bottom: 1px solid #ebe8e2;
+  padding-bottom: 9px;
+}
+
+.summary-app-row {
+  border-bottom: 1px solid #f0eee9;
+  gap: 18px;
+  min-height: 48px;
+}
+
+.summary-app-row:last-child {
+  border-bottom: 0;
+}
+
+.summary-app-label {
+  gap: 9px;
+  min-width: 150px;
+}
+
+.summary-app-icon {
+  border-radius: 5px;
+  flex: 0 0 auto;
+  height: 24px;
+  object-fit: contain;
+  width: 24px;
+}
+
+.summary-app-label i {
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 8px;
+  width: 8px;
+}
+
+.summary-app-label strong {
+  font-size: 13px;
+}
+
+.summary-app-bar {
+  background: #eeece7;
+  border-radius: 999px;
+  flex: 1;
+  height: 7px;
+  overflow: hidden;
+}
+
+.summary-app-bar i {
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.summary-app-value {
+  color: #606a70;
+  font-size: 12px;
+  gap: 10px;
+  justify-content: flex-end;
+  min-width: 125px;
+}
+
+.summary-app-value small {
+  color: #949b9f;
+  font-size: 10px;
+  width: 38px;
+}
+
+.summary-empty {
+  color: #7a8388;
+  font-size: 13px;
+  padding: 22px 0 4px;
+}
+
 @media (max-width: 980px) {
   body { min-width: 680px; }
   .workspace { grid-template-columns: 1fr; }
   .detail-card { position: static; }
+  .summary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

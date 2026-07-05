@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import os
+import plistlib
 import queue
+import re
 import statistics
+import subprocess
 import threading
 import time
 import urllib.error
@@ -27,6 +31,10 @@ STATIC_DIRECTORY = Path(__file__).parent / "static"
 IDLE_THRESHOLD_SECONDS = 120
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 MAX_CALENDAR_REQUEST_BYTES = 64 * 1024
+APP_ICON_CACHE = Path.home() / "Library" / "Caches" / "ActivityProbe" / "icons"
+VALID_BUNDLE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+missing_app_icons = set()
+app_icon_lock = threading.Lock()
 
 
 def parse_timestamp(value):
@@ -41,6 +49,92 @@ def serialize_period(period):
         for key, value in period.items()
         if not key.startswith("_")
     }
+
+
+def resolve_app_icon(bundle_identifier):
+    if not VALID_BUNDLE_IDENTIFIER.fullmatch(bundle_identifier):
+        return None
+
+    cache_name = hashlib.sha256(bundle_identifier.encode("utf-8")).hexdigest() + ".png"
+    cached_icon = APP_ICON_CACHE / cache_name
+    if cached_icon.is_file():
+        return cached_icon
+
+    with app_icon_lock:
+        if cached_icon.is_file():
+            return cached_icon
+        if bundle_identifier in missing_app_icons:
+            return None
+
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/mdfind",
+                    "kMDItemCFBundleIdentifier == '{}'".format(bundle_identifier),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=3,
+            )
+            app_paths = sorted(
+                (
+                    Path(line)
+                    for line in result.stdout.splitlines()
+                    if line.strip().endswith(".app")
+                ),
+                key=lambda path: (len(path.parts), len(str(path))),
+            )
+
+            source_icon = None
+            for app_path in app_paths:
+                info_path = app_path / "Contents" / "Info.plist"
+                if not info_path.is_file():
+                    continue
+                with info_path.open("rb") as info_file:
+                    info = plistlib.load(info_file)
+                icon_name = info.get("CFBundleIconFile")
+                if not isinstance(icon_name, str) or not icon_name:
+                    continue
+                if not Path(icon_name).suffix:
+                    icon_name += ".icns"
+                candidate = app_path / "Contents" / "Resources" / icon_name
+                if candidate.is_file():
+                    source_icon = candidate
+                    break
+
+            if source_icon is None:
+                missing_app_icons.add(bundle_identifier)
+                return None
+
+            APP_ICON_CACHE.mkdir(parents=True, exist_ok=True)
+            temporary_icon = cached_icon.with_suffix(".tmp.png")
+            conversion = subprocess.run(
+                [
+                    "/usr/bin/sips",
+                    "-s",
+                    "format",
+                    "png",
+                    "-z",
+                    "64",
+                    "64",
+                    str(source_icon),
+                    "--out",
+                    str(temporary_icon),
+                ],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            if conversion.returncode != 0 or not temporary_icon.is_file():
+                temporary_icon.unlink(missing_ok=True)
+                missing_app_icons.add(bundle_identifier)
+                return None
+            temporary_icon.replace(cached_icon)
+            return cached_icon
+        except (OSError, plistlib.InvalidFileException, subprocess.SubprocessError):
+            missing_app_icons.add(bundle_identifier)
+            return None
 
 
 class CalendarExportError(Exception):
@@ -514,8 +608,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIRECTORY), **kwargs)
 
+    def end_headers(self):
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
 
         if path == "/api/periods":
             self.send_json(self.model.snapshot())
@@ -523,6 +623,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/events":
             self.stream_events()
+            return
+
+        if path == "/api/app-icon":
+            query = urllib.parse.parse_qs(parsed_url.query)
+            bundle_identifier = query.get("bundle_id", [""])[0]
+            icon_path = resolve_app_icon(bundle_identifier)
+            if icon_path is None:
+                self.send_error(404)
+                return
+            icon = icon_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(icon)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(icon)
             return
 
         super().do_GET()

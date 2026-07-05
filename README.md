@@ -194,6 +194,24 @@ Clicking a block opens the detail pane. The pane lists the original
 window-title periods represented by that block. Clicking Other exposes periods
 from all applications grouped into it.
 
+### Daily aggregate
+
+The section below the timeline summarizes reconstructed server periods for the
+entire selected local day. Its values do not depend on the current zoom level or
+visible timeline summaries.
+
+It shows:
+
+- **Active time** as the union of all non-Idle period intervals.
+- **Idle time** as the union of all Idle intervals.
+- The number of distinct non-Idle application bundle identifiers.
+- Application switches after consecutive periods from the same app are
+  collapsed; Idle does not itself count as an application switch.
+- A duration-ranked application breakdown. Each app’s duration is the union of
+  its periods, and its percentage is relative to total active time.
+
+Aggregate values and application bars update as live periods arrive.
+
 ### Navigating the timeline
 
 - **Fit** frames the available activity with a small amount of padding.

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Activity Timeline</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260705-summary">
 </head>
 <body>
   <main>
@@ -74,8 +74,24 @@
         </div>
       </aside>
     </section>
+
+    <section class="card daily-summary" aria-labelledby="daily-summary-heading">
+      <div class="summary-header">
+        <div>
+          <p class="eyebrow">Daily aggregate</p>
+          <h2 id="daily-summary-heading">Day summary</h2>
+        </div>
+        <p id="summary-date" class="summary-date"></p>
+      </div>
+      <div id="summary-metrics" class="summary-metrics"></div>
+      <div class="summary-breakdown-heading">
+        <h3>Applications</h3>
+        <span id="summary-app-count"></span>
+      </div>
+      <div id="summary-apps" class="summary-apps"></div>
+    </section>
   </main>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260705-summary"></script>
 </body>
 </html>
