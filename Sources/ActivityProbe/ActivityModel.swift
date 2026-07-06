@@ -42,7 +42,7 @@ final class ActivityModel: ObservableObject {
     }
 
     var dataFileURL: URL {
-        store.fileURL
+        store.directoryURL
     }
 
     var accessibilityGranted: Bool {
@@ -75,7 +75,7 @@ final class ActivityModel: ObservableObject {
     func snapshotJSON() -> String {
         encode(
             ActivitySnapshot(
-                dataFile: store.fileURL.path,
+                dataFile: store.directoryURL.path,
                 observationCount: accumulator.observationCount,
                 periods: accumulator.periods
             )

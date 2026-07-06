@@ -117,11 +117,13 @@ struct PeriodChange: Encodable {
 }
 
 final class ObservationStore {
-    let fileURL: URL
+    let directoryURL: URL
 
-    private let fileHandle: FileHandle
+    private var fileHandle: FileHandle?
+    private var openDateKey: String?
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let dateFormatter: DateFormatter
 
     init() throws {
         let applicationSupport = try FileManager.default.url(
@@ -130,22 +132,14 @@ final class ObservationStore {
             appropriateFor: nil,
             create: true
         )
-        let directory = applicationSupport.appendingPathComponent(
+        directoryURL = applicationSupport.appendingPathComponent(
             "ActivityProbe",
             isDirectory: true
         )
         try FileManager.default.createDirectory(
-            at: directory,
+            at: directoryURL,
             withIntermediateDirectories: true
         )
-
-        fileURL = directory.appendingPathComponent("activity.jsonl")
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
-            FileManager.default.createFile(atPath: fileURL.path, contents: nil)
-        }
-
-        fileHandle = try FileHandle(forWritingTo: fileURL)
-        try fileHandle.seekToEnd()
 
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -153,32 +147,71 @@ final class ObservationStore {
 
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
+
+        dateFormatter = DateFormatter()
+        dateFormatter.calendar = Calendar(identifier: .gregorian)
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.timeZone = .current
+        dateFormatter.dateFormat = "yyyy-MM-dd"
     }
 
     deinit {
-        try? fileHandle.close()
+        try? fileHandle?.close()
     }
 
     func append(_ observation: Observation) throws {
+        let dateKey = dateFormatter.string(from: observation.timestamp)
+        if dateKey != openDateKey || fileHandle == nil {
+            try fileHandle?.close()
+            let fileURL = dailyFileURL(for: dateKey)
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                _ = FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+            }
+            fileHandle = try FileHandle(forWritingTo: fileURL)
+            try fileHandle?.seekToEnd()
+            openDateKey = dateKey
+        }
+
         var data = try encoder.encode(observation)
         data.append(0x0A)
-        try fileHandle.write(contentsOf: data)
+        try fileHandle?.write(contentsOf: data)
     }
 
     func readAll() -> [Observation] {
-        guard
-            let data = try? Data(contentsOf: fileURL),
-            let text = String(data: data, encoding: .utf8)
-        else {
-            return []
-        }
-
-        return text
-            .split(separator: "\n")
-            .compactMap { line in
-                try? decoder.decode(Observation.self, from: Data(line.utf8))
+        dataFiles().flatMap { fileURL in
+            guard
+                let data = try? Data(contentsOf: fileURL),
+                let text = String(data: data, encoding: .utf8)
+            else {
+                return [Observation]()
             }
+
+            return text
+                .split(separator: "\n")
+                .compactMap { line in
+                    try? decoder.decode(Observation.self, from: Data(line.utf8))
+                }
+        }
             .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private func dailyFileURL(for dateKey: String) -> URL {
+        directoryURL.appendingPathComponent("activity-\(dateKey).jsonl")
+    }
+
+    private func dataFiles() -> [URL] {
+        (
+            try? FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        )?
+            .filter {
+                $0.lastPathComponent.hasPrefix("activity-") &&
+                $0.pathExtension == "jsonl"
+            }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
     }
 }
 

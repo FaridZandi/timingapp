@@ -69,7 +69,7 @@ struct ActivityMenu: View {
             model.togglePaused()
         }
 
-        Button("Open Data File") {
+        Button("Open Data Folder") {
             NSWorkspace.shared.activateFileViewerSelecting([model.dataFileURL])
         }
 
@@ -142,7 +142,7 @@ struct ActivitySettings: View {
                 )
             )
 
-            LabeledContent("Activity data") {
+            LabeledContent("Activity data folder") {
                 Text(model.dataFileURL.path)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)

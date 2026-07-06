@@ -25,7 +25,6 @@ DEFAULT_DATA = (
     / "Library"
     / "Application Support"
     / "ActivityProbe"
-    / "activity.jsonl"
 )
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 IDLE_THRESHOLD_SECONDS = 120
@@ -292,8 +291,8 @@ class ActivityModel:
         self.recent_times = []
         self.last_observation_time = None
         self.subscribers = set()
-        self.file_offset = 0
-        self.partial_line = b""
+        self.file_offsets = {}
+        self.partial_lines = {}
         self.stop_event = threading.Event()
 
     def start(self):
@@ -302,24 +301,26 @@ class ActivityModel:
 
     def reload(self):
         observations = []
-        data = b""
+        self.file_offsets = {}
+        self.partial_lines = {}
 
-        try:
-            with self.data_path.open("rb") as source:
-                data = source.read()
-                self.file_offset = source.tell()
-        except FileNotFoundError:
-            self.file_offset = 0
+        for data_file in self.data_files():
+            try:
+                with data_file.open("rb") as source:
+                    data = source.read()
+                    self.file_offsets[data_file] = source.tell()
+            except FileNotFoundError:
+                continue
 
-        lines = data.splitlines(keepends=True)
-        self.partial_line = b""
-        if lines and not lines[-1].endswith(b"\n"):
-            self.partial_line = lines.pop()
+            lines = data.splitlines(keepends=True)
+            self.partial_lines[data_file] = b""
+            if lines and not lines[-1].endswith(b"\n"):
+                self.partial_lines[data_file] = lines.pop()
 
-        for line in lines:
-            observation = self.decode_line(line)
-            if observation:
-                observations.append(observation)
+            for line in lines:
+                observation = self.decode_line(line)
+                if observation:
+                    observations.append(observation)
 
         observations.sort(key=lambda item: item["_time"])
         gaps = [
@@ -338,6 +339,14 @@ class ActivityModel:
                 self.add_observation_locked(observation)
 
         self.broadcast("reset", self.snapshot())
+
+    def data_files(self):
+        if self.data_path.is_file():
+            return [self.data_path]
+        if not self.data_path.exists():
+            return []
+
+        return sorted(self.data_path.glob("activity-????-??-??.jsonl"))
 
     @staticmethod
     def decode_line(line):
@@ -573,31 +582,41 @@ class ActivityModel:
                     pass
 
     def read_appended_data(self):
-        try:
-            size = self.data_path.stat().st_size
-        except FileNotFoundError:
-            return
-
-        if size < self.file_offset:
+        data_files = self.data_files()
+        if set(data_files) != set(self.file_offsets):
             self.reload()
             return
-        if size == self.file_offset:
-            return
 
-        with self.data_path.open("rb") as source:
-            source.seek(self.file_offset)
-            chunk = source.read()
-            self.file_offset = source.tell()
+        for data_file in data_files:
+            try:
+                size = data_file.stat().st_size
+            except FileNotFoundError:
+                self.reload()
+                return
 
-        lines = (self.partial_line + chunk).splitlines(keepends=True)
-        self.partial_line = b""
-        if lines and not lines[-1].endswith(b"\n"):
-            self.partial_line = lines.pop()
+            file_offset = self.file_offsets[data_file]
+            if size < file_offset:
+                self.reload()
+                return
+            if size == file_offset:
+                continue
 
-        for line in lines:
-            observation = self.decode_line(line)
-            if observation:
-                self.add_observation(observation)
+            with data_file.open("rb") as source:
+                source.seek(file_offset)
+                chunk = source.read()
+                self.file_offsets[data_file] = source.tell()
+
+            lines = (
+                self.partial_lines.get(data_file, b"") + chunk
+            ).splitlines(keepends=True)
+            self.partial_lines[data_file] = b""
+            if lines and not lines[-1].endswith(b"\n"):
+                self.partial_lines[data_file] = lines.pop()
+
+            for line in lines:
+                observation = self.decode_line(line)
+                if observation:
+                    self.add_observation(observation)
 
     def watch(self):
         while not self.stop_event.wait(0.5):
@@ -739,7 +758,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description="View Activity Probe data.")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
+    parser.add_argument(
+        "--data",
+        type=Path,
+        default=DEFAULT_DATA,
+        help="Activity Probe data directory or a single JSONL file.",
+    )
     arguments = parser.parse_args()
 
     model = ActivityModel(arguments.data.expanduser())

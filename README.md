@@ -32,25 +32,28 @@ rebuilding an ad-hoc-signed app can require Accessibility approval again.
 
 ## Stored data
 
-Every observation is appended as one JSON object per line to:
+Every observation is appended as one JSON object per line. Files rotate at
+local midnight and are named for the day on which their observations began:
 
 ```text
-~/Library/Application Support/ActivityProbe/activity.jsonl
+~/Library/Application Support/ActivityProbe/activity-YYYY-MM-DD.jsonl
 ```
 
-The file is preserved between runs. JSONL can be read incrementally, processed
-with command-line tools, or imported into a database later.
+Daily rotation bounds the size of each file while keeping the data directly
+inspectable and easy to process with command-line tools.
 
 View the latest observations:
 
 ```sh
-tail -n 10 "$HOME/Library/Application Support/ActivityProbe/activity.jsonl"
+tail -n 10 "$(find "$HOME/Library/Application Support/ActivityProbe" \
+  -name 'activity-????-??-??.jsonl' -print | sort | tail -n 1)"
 ```
 
 Pretty-print one observation:
 
 ```sh
-tail -n 1 "$HOME/Library/Application Support/ActivityProbe/activity.jsonl" | jq
+tail -n 1 "$(find "$HOME/Library/Application Support/ActivityProbe" \
+  -name 'activity-????-??-??.jsonl' -print | sort | tail -n 1)" | jq
 ```
 
 Application names and idle time work without special permission. All
@@ -72,7 +75,7 @@ Open <http://127.0.0.1:8765>.
 
 ### How the timeline is prepared
 
-The JSONL file remains the source of truth. The timeline is a derived view
+The JSONL files remain the source of truth. The timeline is a derived view
 created in two stages: the server reconstructs periods from observations, then
 the browser adapts those periods to the selected day and current zoom level.
 
@@ -226,10 +229,12 @@ Aggregate values and application bars update as live periods arrive.
 
 ### Live updates
 
-The server reads the complete JSONL file only at startup. It then checks for file
-growth every 500 milliseconds and reads only newly appended bytes. New
-observations update the in-memory period model and are sent to connected pages
-using Server-Sent Events.
+The server reads the daily JSONL files at startup. It then checks for growth
+every 500 milliseconds and reads only newly appended bytes. When local midnight
+creates a new daily file, the server discovers it and rebuilds once from the
+complete set; ordinary live updates remain incremental. New observations update
+the in-memory period model and are sent to connected pages using Server-Sent
+Events.
 
 The browser receives an initial snapshot followed by period updates. It
 recomputes zoom-dependent summaries and overlap lanes, but reconciles timeline
@@ -274,8 +279,9 @@ environment:
 OPENAI_API_KEY="…" python3 dashboard/server.py
 ```
 
-To use another data file or port:
+To use another Activity Probe data directory, a single JSONL file, or another
+port:
 
 ```sh
-python3 dashboard/server.py --data ./activity.jsonl --port 9000
+python3 dashboard/server.py --data ./activity-data --port 9000
 ```
