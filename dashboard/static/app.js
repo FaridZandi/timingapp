@@ -2,7 +2,7 @@ const palette = [
   "#526ed3", "#d16854", "#368b68", "#9a61c7",
   "#bd842d", "#238894", "#c65388", "#667485"
 ];
-const minimumBlockPixels = 5;
+const minimumBlockPixels = 12;
 
 const elements = {
   addGoogleCalendar: document.querySelector("#add-google-calendar"),

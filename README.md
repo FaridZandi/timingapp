@@ -137,7 +137,7 @@ Idle is treated as a hard timeline boundary:
 - Idle spans separated by at most 15 seconds are joined visually.
 - Activity fragments between those joined Idle spans are suppressed from the
   display.
-- An Idle span smaller than five rendered pixels is hidden.
+- An Idle span smaller than twelve rendered pixels is hidden.
 - Idle never merges with an application, never participates in overlap lanes,
   and always occupies the full timeline width.
 
@@ -157,7 +157,7 @@ no more than exactly **24 pixels** at the current zoom level. Individual block
 duration does not affect eligibility. Application blocks never merge across an
 Idle span.
 
-Any final application block smaller than **5 pixels** is hidden, including
+Any final application block smaller than **12 pixels** is hidden, including
 summarized blocks and portions clipped at the viewport edge. Zooming in
 therefore separates blocks and reveals small fragments; zooming out combines
 nearby work into longer summaries.
