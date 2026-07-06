@@ -138,8 +138,10 @@ Idle is treated as a hard timeline boundary:
 - Activity fragments between those joined Idle spans are suppressed from the
   display.
 - An Idle span smaller than twelve rendered pixels is hidden.
-- Idle never merges with an application, never participates in overlap lanes,
-  and always occupies the full timeline width.
+- A visible Idle block never merges with an application, never participates in
+  overlap lanes, and always occupies the full timeline width. Idle fragments
+  hidden at the current zoom level do not split otherwise mergeable
+  application blocks.
 
 These operations only affect presentation. Source observations and reconstructed
 server periods remain available.
@@ -155,12 +157,21 @@ milliseconds per pixel = visible time span / timeline track height
 For each application independently, blocks merge when the time between them is
 no more than exactly **24 pixels** at the current zoom level. Individual block
 duration does not affect eligibility. Application blocks never merge across an
-Idle span.
+Idle span that remains visible at the current zoom level.
 
-Any final application block smaller than **12 pixels** is hidden, including
-summarized blocks and portions clipped at the viewport edge. Zooming in
-therefore separates blocks and reveals small fragments; zooming out combines
-nearby work into longer summaries.
+Application visibility uses an adaptive threshold after same-app summarization:
+
+- A block is **contended** when a different application overlaps it or lies
+  within 12 rendered pixels. Contended blocks smaller than **12 pixels** are
+  hidden.
+- An application block without nearby contention is retained down to **5
+  pixels**.
+- The same threshold applies to portions clipped at the viewport edge.
+
+Contention is measured before small blocks are removed, so hidden fragments
+still contribute to classifying a crowded region. Zooming in separates blocks,
+reduces contention, and reveals small fragments; zooming out combines nearby
+work into longer summaries.
 
 A summarized block has two different duration concepts:
 

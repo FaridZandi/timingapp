@@ -2,7 +2,9 @@ const palette = [
   "#526ed3", "#d16854", "#368b68", "#9a61c7",
   "#bd842d", "#238894", "#c65388", "#667485"
 ];
-const minimumBlockPixels = 12;
+const isolatedBlockPixels = 5;
+const contendedBlockPixels = 12;
+const contentionRadiusPixels = 12;
 
 const elements = {
   addGoogleCalendar: document.querySelector("#add-google-calendar"),
@@ -152,14 +154,42 @@ function buildDisplayBlocks() {
   const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
-  const ignoredBlockThreshold = millisecondsPerPixel * minimumBlockPixels;
   const closeGapThreshold = millisecondsPerPixel * 24;
+  const idleThreshold = millisecondsPerPixel * contendedBlockPixels;
+  const contentionRadius = millisecondsPerPixel * contentionRadiusPixels;
 
   const summarized = summarizeBlocksByApplication(
-    ignoredBlockThreshold,
+    idleThreshold,
     closeGapThreshold
   );
-  return assignOverlapLanes(summarized);
+  const activityBlocks = summarized.filter(
+    block => !isInactiveBundle(block.bundleIdentifier)
+  );
+  const visible = summarized.filter(block => {
+    if (isInactiveBundle(block.bundleIdentifier)) {
+      block.minimumPixels = contendedBlockPixels;
+      return true;
+    }
+
+    const isContended = activityBlocks.some(other => {
+      if (
+        other === block ||
+        other.bundleIdentifier === block.bundleIdentifier
+      ) {
+        return false;
+      }
+      const gap = Math.max(
+        0,
+        Math.max(block.start, other.start) - Math.min(block.end, other.end)
+      );
+      return gap <= contentionRadius;
+    });
+    block.minimumPixels = isContended
+      ? contendedBlockPixels
+      : isolatedBlockPixels;
+    return block.end - block.start >= millisecondsPerPixel * block.minimumPixels;
+  });
+  return assignOverlapLanes(visible);
 }
 
 function basicDisplayBlock(block, rawIndex) {
@@ -196,14 +226,12 @@ function summarizedDisplayBlock(rawIndices) {
 }
 
 function summarizeBlocksByApplication(
-  ignoredBlockThreshold,
+  idleThreshold,
   closeGapThreshold
 ) {
-  const idleNormalization = normalizeIdleBlocks(ignoredBlockThreshold);
+  const idleNormalization = normalizeIdleBlocks(idleThreshold);
   const byApplication = new Map();
-  const inactiveBlocks = state.blocks.filter(
-    block => isInactiveBundle(block.bundleIdentifier)
-  );
+  const inactiveBlocks = idleNormalization.displayBlocks;
   state.blocks.forEach((block, rawIndex) => {
     if (
       block.bundleIdentifier === "__idle__" ||
@@ -221,7 +249,6 @@ function summarizeBlocksByApplication(
     let index = 0;
     while (index < entries.length) {
       const current = entries[index];
-      const duration = current.block.end - current.block.start;
 
       const candidates = [current];
       let cursor = index + 1;
@@ -240,13 +267,10 @@ function summarizeBlocksByApplication(
       }
 
       if (candidates.length >= 2) {
-        const summarized = summarizedDisplayBlock(
+        result.push(summarizedDisplayBlock(
           candidates.map(candidate => candidate.rawIndex)
-        );
-        if (summarized.end - summarized.start >= ignoredBlockThreshold) {
-          result.push(summarized);
-        }
-      } else if (duration >= ignoredBlockThreshold) {
+        ));
+      } else {
         result.push(basicDisplayBlock(current.block, current.rawIndex));
       }
       index = cursor;
@@ -416,7 +440,7 @@ function positionBlock(node, block) {
   const top = (visibleStart - state.viewportStart) / span * 100;
   const height = (visibleEnd - visibleStart) / span * 100;
   const pixelHeight = height / 100 * elements.timeline.clientHeight;
-  if (pixelHeight < minimumBlockPixels) {
+  if (pixelHeight < (block.minimumPixels || contendedBlockPixels)) {
     node.hidden = true;
     return;
   }
