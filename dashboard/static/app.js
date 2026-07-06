@@ -2,6 +2,7 @@ const palette = [
   "#526ed3", "#d16854", "#368b68", "#9a61c7",
   "#bd842d", "#238894", "#c65388", "#667485"
 ];
+const minimumBlockPixels = 5;
 
 const elements = {
   addGoogleCalendar: document.querySelector("#add-google-calendar"),
@@ -151,7 +152,7 @@ function buildDisplayBlocks() {
   const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
-  const ignoredBlockThreshold = millisecondsPerPixel * 3;
+  const ignoredBlockThreshold = millisecondsPerPixel * minimumBlockPixels;
   const closeGapThreshold = millisecondsPerPixel * 24;
 
   const summarized = summarizeBlocksByApplication(
@@ -239,9 +240,12 @@ function summarizeBlocksByApplication(
       }
 
       if (candidates.length >= 2) {
-        result.push(summarizedDisplayBlock(
+        const summarized = summarizedDisplayBlock(
           candidates.map(candidate => candidate.rawIndex)
-        ));
+        );
+        if (summarized.end - summarized.start >= ignoredBlockThreshold) {
+          result.push(summarized);
+        }
       } else if (duration >= ignoredBlockThreshold) {
         result.push(basicDisplayBlock(current.block, current.rawIndex));
       }
@@ -409,13 +413,18 @@ function positionBlock(node, block) {
     return;
   }
 
-  node.hidden = false;
   const top = (visibleStart - state.viewportStart) / span * 100;
   const height = (visibleEnd - visibleStart) / span * 100;
-  node.style.top = `${top}%`;
-  node.style.height = `${Math.max(0.3, height)}%`;
-
   const pixelHeight = height / 100 * elements.timeline.clientHeight;
+  if (pixelHeight < minimumBlockPixels) {
+    node.hidden = true;
+    return;
+  }
+
+  node.hidden = false;
+  node.style.top = `${top}%`;
+  node.style.height = `${height}%`;
+
   node.classList.toggle("has-label", pixelHeight >= 30);
   node.classList.toggle("has-time", pixelHeight >= 54);
   node.classList.toggle("continues-before", Boolean(block.continuesBefore));
