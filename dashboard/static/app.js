@@ -338,14 +338,42 @@ function assignOverlapLanes(blocks) {
   let component = [];
   let componentEnd = -Infinity;
 
-  function finishComponent() {
-    if (!component.length) return;
+  function allocateIntervalLanes(componentBlocks) {
+    const laneEnds = [];
+    const preferredLaneByBundle = new Map();
+    const ordered = componentBlocks.slice().sort(
+      (left, right) => left.start - right.start || left.end - right.end
+    );
 
+    for (const block of ordered) {
+      const preferredLane = preferredLaneByBundle.get(block.bundleIdentifier);
+      let laneIndex = (
+        preferredLane !== undefined &&
+        laneEnds[preferredLane] <= block.start
+      )
+        ? preferredLane
+        : laneEnds.findIndex(end => end <= block.start);
+
+      if (laneIndex === -1) {
+        laneIndex = laneEnds.length;
+        laneEnds.push(-Infinity);
+      }
+      laneEnds[laneIndex] = block.end;
+      preferredLaneByBundle.set(block.bundleIdentifier, laneIndex);
+      block.laneIndex = laneIndex;
+    }
+
+    for (const block of componentBlocks) {
+      block.laneCount = laneEnds.length;
+    }
+    return laneEnds.length;
+  }
+
+  function collapseOverflow(componentBlocks) {
     const totals = new Map();
-    for (const block of component) {
+    for (const block of componentBlocks) {
       const value = totals.get(block.bundleIdentifier) || {
         bundleIdentifier: block.bundleIdentifier,
-        appName: block.appName,
         duration: 0,
         firstStart: block.start
       };
@@ -354,51 +382,64 @@ function assignOverlapLanes(blocks) {
       totals.set(block.bundleIdentifier, value);
     }
 
-    let componentBlocks = component;
-    let applications = [...totals.values()];
+    const retainedBundles = new Set(
+      [...totals.values()]
+        .sort((left, right) =>
+          right.duration - left.duration || left.firstStart - right.firstStart
+        )
+        .slice(0, 3)
+        .map(app => app.bundleIdentifier)
+    );
+    const explicit = componentBlocks.filter(
+      block => retainedBundles.has(block.bundleIdentifier)
+    );
+    const overflow = componentBlocks
+      .filter(block => !retainedBundles.has(block.bundleIdentifier))
+      .sort((left, right) => left.start - right.start || left.end - right.end);
+    const overflowGroups = [];
 
-    if (applications.length > 4) {
-      const retained = applications
-        .slice()
-        .sort((left, right) => right.duration - left.duration)
-        .slice(0, 3);
-      const retainedBundles = new Set(retained.map(app => app.bundleIdentifier));
-      const overflow = component.filter(
-        block => !retainedBundles.has(block.bundleIdentifier)
-      );
-      const explicit = component.filter(
-        block => retainedBundles.has(block.bundleIdentifier)
-      );
-      const other = {
-        kind: "single",
-        key: `other:${overflow.map(block => block.key).join("|")}`,
-        rawIndices: overflow.flatMap(block => block.rawIndices),
-        start: Math.min(...overflow.map(block => block.start)),
-        end: Math.max(...overflow.map(block => block.end)),
-        appName: "Other",
-        bundleIdentifier: "__other__",
-        activeDuration: overflow.reduce(
-          (total, block) => total + block.activeDuration,
-          0
-        ),
-        isSummarized: true
-      };
-      componentBlocks = [...explicit, other];
-      applications = [...retained, {
-        bundleIdentifier: "__other__",
-        appName: "Other",
-        duration: other.activeDuration,
-        firstStart: other.start
-      }];
+    for (const block of overflow) {
+      const current = overflowGroups[overflowGroups.length - 1];
+      if (current && block.start < current.end) {
+        current.blocks.push(block);
+        current.end = Math.max(current.end, block.end);
+      } else {
+        overflowGroups.push({
+          blocks: [block],
+          start: block.start,
+          end: block.end
+        });
+      }
     }
 
-    applications.sort((left, right) => left.firstStart - right.firstStart);
-    const laneByBundle = new Map(
-      applications.map((app, laneIndex) => [app.bundleIdentifier, laneIndex])
-    );
+    const otherBlocks = overflowGroups.map(group => ({
+      kind: "single",
+      key: `other:${group.blocks.map(block => block.key).join("|")}`,
+      rawIndices: group.blocks.flatMap(block => block.rawIndices),
+      start: group.start,
+      end: group.end,
+      appName: "Other",
+      bundleIdentifier: "__other__",
+      activeDuration: group.blocks.reduce(
+        (total, block) => total + block.activeDuration,
+        0
+      ),
+      isSummarized: true,
+      minimumPixels: contendedBlockPixels
+    }));
+    return [...explicit, ...otherBlocks];
+  }
+
+  function finishComponent() {
+    if (!component.length) return;
+
+    let componentBlocks = component;
+    if (allocateIntervalLanes(componentBlocks) > 4) {
+      componentBlocks = collapseOverflow(componentBlocks);
+      allocateIntervalLanes(componentBlocks);
+    }
+
     for (const block of componentBlocks) {
-      block.laneIndex = laneByBundle.get(block.bundleIdentifier);
-      block.laneCount = applications.length;
       result.push(block);
     }
 

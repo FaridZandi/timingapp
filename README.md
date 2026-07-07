@@ -183,15 +183,20 @@ A summarized block has two different duration concepts:
 #### 6. Assign overlap lanes
 
 After summarization, temporally overlapping blocks form connected overlap
-regions. Applications in a region receive equal-width, side-by-side lanes.
-Lane order follows each application’s first appearance in that region.
+regions. Within each region, blocks are processed in start-time order and use
+the first lane whose previous block has ended. An application reuses its
+previous lane when that lane is available. The region’s width is divided by its
+maximum simultaneous overlap, not by the total number of applications that
+appear anywhere in the region.
 
 At most four lanes are displayed:
 
-- With four or fewer applications, every application receives a lane.
-- With more than four, the three applications with the greatest summed active
-  duration remain explicit.
-- All remaining applications are combined into a fourth **Other** lane.
+- If no more than four blocks overlap simultaneously, lanes are reused freely;
+  any number of sequential applications can pass through the same lane.
+- If concurrency exceeds four, the three applications with the greatest summed
+  active duration remain explicit.
+- Remaining applications are combined into **Other** blocks that preserve the
+  union of their time spans rather than filling the entire overlap region.
 
 Idle ends the current overlap region and remains full width.
 
