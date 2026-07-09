@@ -137,7 +137,7 @@ Idle is treated as a hard timeline boundary:
 - Idle spans separated by at most 15 seconds are joined visually.
 - Activity fragments between those joined Idle spans are suppressed from the
   display.
-- An Idle span smaller than twelve rendered pixels is hidden.
+- An Idle span smaller than two rendered pixels is hidden.
 - A visible Idle block never merges with an application, never participates in
   overlap lanes, and always occupies the full timeline width. Idle fragments
   hidden at the current zoom level do not split otherwise mergeable
@@ -159,19 +159,24 @@ no more than exactly **24 pixels** at the current zoom level. Individual block
 duration does not affect eligibility. Application blocks never merge across an
 Idle span that remains visible at the current zoom level.
 
-Application visibility uses an adaptive threshold after same-app summarization:
+Blocks are no longer hidden just because they are visually minor, contended, or
+have low active time inside a summarized span. The only display floor is an
+extreme-size guard: a block, or the currently visible clipped portion of it, is
+hidden only when it renders below **2 pixels**.
 
-- A block is **contended** when a different application overlaps it or lies
-  within 12 rendered pixels. Contended blocks smaller than **12 pixels** are
-  hidden.
-- An application block without nearby contention is retained down to **5
-  pixels**.
-- The same threshold applies to portions clipped at the viewport edge.
+After same-app summarization, the browser checks whether the merged result would
+require more than three simultaneous lanes. If so, it selectively expands
+summarized blocks back into their underlying base blocks until the lane
+requirement fits. It tries to preserve as much summarization as possible:
 
-Contention is measured before small blocks are removed, so hidden fragments
-still contribute to classifying a crowded region. Zooming in separates blocks,
-reduces contention, and reveals small fragments; zooming out combines nearby
-work into longer summaries.
+- If expanding one summarized block is enough, it picks the smallest such
+  expansion.
+- If no single expansion is enough, it expands the block that reduces lane
+  pressure the most, then repeats.
+
+This means lower zoom levels still get looser proximity-based merging, but a
+merge is not kept when its long visual span would create more than three
+concurrent timeline lanes.
 
 A summarized block has two different duration concepts:
 
@@ -189,12 +194,12 @@ previous lane when that lane is available. The region’s width is divided by it
 maximum simultaneous overlap, not by the total number of applications that
 appear anywhere in the region.
 
-At most four lanes are displayed:
+At most three lanes are displayed:
 
-- If no more than four blocks overlap simultaneously, lanes are reused freely;
+- If no more than three blocks overlap simultaneously, lanes are reused freely;
   any number of sequential applications can pass through the same lane.
-- If concurrency exceeds four, the three applications with the greatest summed
-  active duration remain explicit.
+- If true concurrency still exceeds three after selective merge expansion, the
+  two applications with the greatest summed active duration remain explicit.
 - Remaining applications are combined into **Other** blocks that preserve the
   union of their time spans rather than filling the entire overlap region.
 

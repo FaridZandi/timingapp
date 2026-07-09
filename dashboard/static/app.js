@@ -2,9 +2,9 @@ const palette = [
   "#526ed3", "#d16854", "#368b68", "#9a61c7",
   "#bd842d", "#238894", "#c65388", "#667485"
 ];
-const isolatedBlockPixels = 5;
-const contendedBlockPixels = 12;
-const contentionRadiusPixels = 12;
+const tinyBlockPixels = 2;
+const proximityMergePixels = 24;
+const maxTimelineLanes = 3;
 
 const elements = {
   addGoogleCalendar: document.querySelector("#add-google-calendar"),
@@ -154,57 +154,19 @@ function buildDisplayBlocks() {
   const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
-  const closeGapThreshold = millisecondsPerPixel * 24;
-  const idleThreshold = millisecondsPerPixel * contendedBlockPixels;
-  const contentionRadius = millisecondsPerPixel * contentionRadiusPixels;
+  const closeGapThreshold = millisecondsPerPixel * proximityMergePixels;
+  const tinyBlockThreshold = millisecondsPerPixel * tinyBlockPixels;
 
-  const summarized = summarizeBlocksByApplication(
-    idleThreshold,
+  const displayBlocks = summarizeBlocksByApplication(
+    tinyBlockThreshold,
     closeGapThreshold
   );
-  const activityBlocks = summarized.filter(
-    block => !isInactiveBundle(block.bundleIdentifier)
+  for (const block of displayBlocks) {
+    block.minimumPixels = tinyBlockPixels;
+  }
+  return assignOverlapLanes(
+    limitMergesForLaneCapacity(displayBlocks, maxTimelineLanes)
   );
-  const visible = summarized.filter(block => {
-    if (isInactiveBundle(block.bundleIdentifier)) {
-      block.minimumPixels = contendedBlockPixels;
-      return true;
-    }
-
-    const isContended = activityBlocks.some(other => {
-      if (
-        other === block ||
-        other.bundleIdentifier === block.bundleIdentifier
-      ) {
-        return false;
-      }
-      const gap = Math.max(
-        0,
-        Math.max(block.start, other.start) - Math.min(block.end, other.end)
-      );
-      return gap <= contentionRadius;
-    });
-    block.minimumPixels = isContended
-      ? contendedBlockPixels
-      : isolatedBlockPixels;
-    return activePixelHeight(block, millisecondsPerPixel) >= block.minimumPixels;
-  });
-  return assignOverlapLanes(visible);
-}
-
-function activePixelHeight(
-  block,
-  millisecondsPerPixel,
-  visibleStart = block.start,
-  visibleEnd = block.end
-) {
-  const blockStart = Math.max(block.start, visibleStart);
-  const blockEnd = Math.min(block.end, visibleEnd);
-  const visibleDuration = Math.max(0, blockEnd - blockStart);
-  const spanDuration = Math.max(1, block.end - block.start);
-  const activeDuration = block.activeDuration ?? spanDuration;
-  const visibleActiveDuration = activeDuration * visibleDuration / spanDuration;
-  return visibleActiveDuration / millisecondsPerPixel;
 }
 
 function basicDisplayBlock(block, rawIndex) {
@@ -348,6 +310,146 @@ function normalizeIdleBlocks(ignoredBlockThreshold) {
   return { displayBlocks, suppressedRawIndices };
 }
 
+function limitMergesForLaneCapacity(blocks, maxLanes) {
+  let result = blocks.slice();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    const next = [];
+    const components = activeOverlapComponents(result);
+
+    for (const component of components) {
+      const expansion = bestExpansionForLaneCapacity(component.blocks, maxLanes);
+      if (expansion) {
+        changed = true;
+        next.push(...expansion);
+      } else {
+        next.push(...component.blocks);
+      }
+    }
+
+    result = next.sort((left, right) =>
+      left.start - right.start || left.end - right.end
+    );
+  }
+
+  return result;
+}
+
+function bestExpansionForLaneCapacity(blocks, maxLanes) {
+  if (intervalLaneCount(blocks) <= maxLanes) return null;
+
+  const candidates = blocks.filter(canExpandSummarizedBlock);
+  if (!candidates.length) return null;
+
+  let best = null;
+  for (const candidate of candidates) {
+    const expanded = expandOneSummarizedBlock(blocks, candidate);
+    const laneCount = intervalLaneCount(expanded);
+    const penalty = candidate.rawIndices.length - 1;
+    const score = {
+      fixesCapacity: laneCount <= maxLanes,
+      laneCount,
+      penalty,
+      activeDuration: candidate.activeDuration
+    };
+
+    if (!best || betterExpansionScore(score, best.score)) {
+      best = { blocks: expanded, score };
+    }
+  }
+
+  return best.blocks;
+}
+
+function betterExpansionScore(left, right) {
+  if (left.fixesCapacity !== right.fixesCapacity) {
+    return left.fixesCapacity;
+  }
+  if (left.fixesCapacity && left.penalty !== right.penalty) {
+    return left.penalty < right.penalty;
+  }
+  if (left.laneCount !== right.laneCount) {
+    return left.laneCount < right.laneCount;
+  }
+  if (left.penalty !== right.penalty) {
+    return left.penalty < right.penalty;
+  }
+  return left.activeDuration < right.activeDuration;
+}
+
+function expandOneSummarizedBlock(blocks, target) {
+  const expanded = [];
+  for (const block of blocks) {
+    if (block === target) {
+      expanded.push(...block.rawIndices.map(index => {
+        const basic = basicDisplayBlock(state.blocks[index], index);
+        basic.minimumPixels = block.minimumPixels ?? tinyBlockPixels;
+        return basic;
+      }));
+    } else {
+      expanded.push(block);
+    }
+  }
+  return expanded.sort((left, right) =>
+    left.start - right.start || left.end - right.end
+  );
+}
+
+function canExpandSummarizedBlock(block) {
+  return (
+    block.isSummarized &&
+    !isInactiveBundle(block.bundleIdentifier) &&
+    block.bundleIdentifier !== "__other__" &&
+    block.rawIndices.length > 1
+  );
+}
+
+function activeOverlapComponents(blocks) {
+  const components = [];
+  let current = [];
+  let currentEnd = -Infinity;
+
+  for (const block of blocks.slice().sort((left, right) =>
+    left.start - right.start || left.end - right.end
+  )) {
+    if (isInactiveBundle(block.bundleIdentifier)) {
+      if (current.length) components.push({ blocks: current });
+      components.push({ blocks: [block] });
+      current = [];
+      currentEnd = -Infinity;
+      continue;
+    }
+
+    if (current.length && block.start >= currentEnd) {
+      components.push({ blocks: current });
+      current = [];
+      currentEnd = -Infinity;
+    }
+    current.push(block);
+    currentEnd = Math.max(currentEnd, block.end);
+  }
+
+  if (current.length) components.push({ blocks: current });
+  return components;
+}
+
+function intervalLaneCount(blocks) {
+  const laneEnds = [];
+  for (const block of blocks.slice().sort((left, right) =>
+    left.start - right.start || left.end - right.end
+  )) {
+    const laneIndex = laneEnds.findIndex(end => end <= block.start);
+    if (laneIndex === -1) {
+      laneEnds.push(block.end);
+    } else {
+      laneEnds[laneIndex] = block.end;
+    }
+  }
+  return laneEnds.length;
+}
+
 function assignOverlapLanes(blocks) {
   const result = [];
   let component = [];
@@ -402,7 +504,7 @@ function assignOverlapLanes(blocks) {
         .sort((left, right) =>
           right.duration - left.duration || left.firstStart - right.firstStart
         )
-        .slice(0, 3)
+        .slice(0, maxTimelineLanes - 1)
         .map(app => app.bundleIdentifier)
     );
     const explicit = componentBlocks.filter(
@@ -440,7 +542,7 @@ function assignOverlapLanes(blocks) {
         0
       ),
       isSummarized: true,
-      minimumPixels: contendedBlockPixels
+      minimumPixels: tinyBlockPixels
     }));
     return [...explicit, ...otherBlocks];
   }
@@ -449,7 +551,7 @@ function assignOverlapLanes(blocks) {
     if (!component.length) return;
 
     let componentBlocks = component;
-    if (allocateIntervalLanes(componentBlocks) > 4) {
+    if (allocateIntervalLanes(componentBlocks) > maxTimelineLanes) {
       componentBlocks = collapseOverflow(componentBlocks);
       allocateIntervalLanes(componentBlocks);
     }
@@ -496,14 +598,7 @@ function positionBlock(node, block) {
   const top = (visibleStart - state.viewportStart) / span * 100;
   const height = (visibleEnd - visibleStart) / span * 100;
   const pixelHeight = height / 100 * elements.timeline.clientHeight;
-  const millisecondsPerPixel = span / elements.timeline.clientHeight;
-  const activePixels = activePixelHeight(
-    block,
-    millisecondsPerPixel,
-    visibleStart,
-    visibleEnd
-  );
-  if (activePixels < (block.minimumPixels || contendedBlockPixels)) {
+  if (pixelHeight < (block.minimumPixels || tinyBlockPixels)) {
     node.hidden = true;
     return;
   }

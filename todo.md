@@ -1,7 +1,7 @@
 [x] Rotate JSONL observations into one file per local day.
 
-[ ] Do something about the "Other" apps that shows up in the timeline. It's very inconvenient. 
-    [ ] Keep a lane for all the small activities that are too small to be shown in the main lanes. This would be the rightmost lane. Technically, no block will be hidden anymore, unless it's merged into a bigger block. 
+[x] Do something about the "Other" apps that shows up in the timeline. It's very inconvenient. 
+    [x] Keep a lane for all the small activities that are too small to be shown in the main lanes. This would be the rightmost lane. Technically, no block will be hidden anymore, unless it's merged into a bigger block. 
 
 [ ] Change the appearance of the idle times. Not show anything at all? 
 
