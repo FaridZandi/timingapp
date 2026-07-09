@@ -187,9 +187,24 @@ function buildDisplayBlocks() {
     block.minimumPixels = isContended
       ? contendedBlockPixels
       : isolatedBlockPixels;
-    return block.end - block.start >= millisecondsPerPixel * block.minimumPixels;
+    return activePixelHeight(block, millisecondsPerPixel) >= block.minimumPixels;
   });
   return assignOverlapLanes(visible);
+}
+
+function activePixelHeight(
+  block,
+  millisecondsPerPixel,
+  visibleStart = block.start,
+  visibleEnd = block.end
+) {
+  const blockStart = Math.max(block.start, visibleStart);
+  const blockEnd = Math.min(block.end, visibleEnd);
+  const visibleDuration = Math.max(0, blockEnd - blockStart);
+  const spanDuration = Math.max(1, block.end - block.start);
+  const activeDuration = block.activeDuration ?? spanDuration;
+  const visibleActiveDuration = activeDuration * visibleDuration / spanDuration;
+  return visibleActiveDuration / millisecondsPerPixel;
 }
 
 function basicDisplayBlock(block, rawIndex) {
@@ -481,7 +496,14 @@ function positionBlock(node, block) {
   const top = (visibleStart - state.viewportStart) / span * 100;
   const height = (visibleEnd - visibleStart) / span * 100;
   const pixelHeight = height / 100 * elements.timeline.clientHeight;
-  if (pixelHeight < (block.minimumPixels || contendedBlockPixels)) {
+  const millisecondsPerPixel = span / elements.timeline.clientHeight;
+  const activePixels = activePixelHeight(
+    block,
+    millisecondsPerPixel,
+    visibleStart,
+    visibleEnd
+  );
+  if (activePixels < (block.minimumPixels || contendedBlockPixels)) {
     node.hidden = true;
     return;
   }
