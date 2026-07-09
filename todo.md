@@ -1,6 +1,7 @@
 [x] Rotate JSONL observations into one file per local day.
 
 [ ] Do something about the "Other" apps that shows up in the timeline. It's very inconvenient. 
+    [ ] Keep a lane for all the small activities that are too small to be shown in the main lanes. This would be the rightmost lane. Technically, no block will be hidden anymore, unless it's merged into a bigger block. 
 
 [ ] Change the appearance of the idle times. Not show anything at all? 
 
@@ -23,5 +24,3 @@
 [ ] Subactivity grouping: Let's say clicking on google chrome reveals a list of subactivities, like "gmail", etc. When hovering over a subactivity, the similar subactivities are highlighted in the list. Clicking on the subactivity will filter the list to only show that subactivity. The degree of similarity should be something to think about. If the exact string match is used, it might become useless. Or maybe not. 
 
 [ ] Pressing the "fit" button, should ignore the idle times at the two ends of the timeline. If the activity starts from 9 AM and goes to 5 PM, the timeline should fit that interval, not the whole day. 
-
-[ ] Keep a lane for all the small activities that are too small to be shown in the main lanes. This would be the rightmost lane. Technically, no block will be hidden anymore, unless it's merged into a bigger block. 
