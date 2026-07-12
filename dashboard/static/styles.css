@@ -292,8 +292,16 @@ button { cursor: pointer; }
   padding: 0 10px;
   position: absolute;
   text-align: left;
-  transition: box-shadow 120ms ease, filter 120ms ease;
+  transition:
+    width 100ms ease,
+    left 100ms ease,
+    box-shadow 120ms ease,
+    filter 120ms ease;
   width: 100%;
+}
+
+.activity-block:not(.layout-ready) {
+  transition: none !important;
 }
 
 .activity-block[hidden] {

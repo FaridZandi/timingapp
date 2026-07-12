@@ -839,12 +839,15 @@ function renderDisplayBlocks() {
 
   for (const block of nextBlocks) {
     let node = existing.get(block.key);
+    retained.add(block.key);
     if (!node || !node.classList.contains(block.kind)) {
       node?.remove();
       node = createDisplayNode(block);
+      updateDisplayNode(node, block);
       elements.blocks.append(node);
+      requestAnimationFrame(() => node.classList.add("layout-ready"));
+      continue;
     }
-    retained.add(block.key);
     updateDisplayNode(node, block);
   }
 
