@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Activity Timeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260705-summary">
+  <link rel="stylesheet" href="/styles.css?v=20260710-phase3">
 </head>
 <body>
   <main>
@@ -14,10 +14,15 @@
         <h1>Timeline</h1>
       </div>
       <div class="controls">
-        <label>
-          Day
-          <select id="day"></select>
-        </label>
+        <div class="day-navigation" aria-label="Day navigation">
+          <button id="previous-day" type="button" title="Previous recorded day">‹</button>
+          <label>
+            Day
+            <select id="day"></select>
+          </label>
+          <button id="next-day" type="button" title="Next recorded day">›</button>
+        </div>
+        <button id="today" type="button">Today</button>
         <button id="refresh" type="button">Refresh</button>
       </div>
     </header>
@@ -38,6 +43,10 @@
             <button id="full-day" type="button">Day</button>
           </div>
         </div>
+        <div id="timeline-filter" class="timeline-filter" hidden>
+          <span>Showing <strong id="timeline-filter-app"></strong></span>
+          <button id="clear-app-filter" type="button">Clear filter</button>
+        </div>
         <div
           id="timeline"
           class="timeline"
@@ -45,6 +54,7 @@
         >
           <div id="axis" class="axis"></div>
           <div class="timeline-rail"></div>
+          <div id="axis-selection" class="axis-selection" hidden></div>
           <div id="blocks" class="blocks"></div>
         </div>
         <p id="total" class="timeline-total"></p>
@@ -70,6 +80,10 @@
             <h3>Subactivities</h3>
             <span id="detail-count"></span>
           </div>
+          <div id="subactivity-controls" class="subactivity-controls" hidden>
+            <span id="subactivity-filter-label"></span>
+            <button id="clear-subactivity-filter" type="button">Show all</button>
+          </div>
           <div id="subactivities" class="subactivities"></div>
         </div>
       </aside>
@@ -92,6 +106,6 @@
     </section>
   </main>
 
-  <script src="/app.js?v=20260705-summary"></script>
+  <script src="/app.js?v=20260710-phase3"></script>
 </body>
 </html>

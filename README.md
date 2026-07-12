@@ -130,21 +130,17 @@ bundle are combined when their gap is at most 20 seconds. This removes
 window-title fragmentation while retaining the original periods for the detail
 pane.
 
-#### 4. Normalize Idle for display
+#### 4. Exclude Idle from the timeline
 
-Idle is treated as a hard timeline boundary:
+Idle periods are retained in the server model and remain available to the daily
+aggregate, but the timeline frontend excludes them before building display
+blocks. They therefore do not render, reserve a lane, create a merge boundary,
+or affect Fit framing. Same-app blocks can merge across an Idle period as though
+it were absent. Passive activity attributed to an application is not treated as
+Idle and remains visible like ordinary app activity.
 
-- Idle spans separated by at most 15 seconds are joined visually.
-- Activity fragments between those joined Idle spans are suppressed from the
-  display.
-- An Idle span smaller than two rendered pixels is hidden.
-- A visible Idle block never merges with an application, never participates in
-  overlap lanes, and always occupies the full timeline width. Idle fragments
-  hidden at the current zoom level do not split otherwise mergeable
-  application blocks.
-
-These operations only affect presentation. Source observations and reconstructed
-server periods remain available.
+This is a presentation choice only. Source observations and reconstructed
+server periods remain available to the daily aggregate and future detail views.
 
 #### 5. Apply zoom-dependent application summarization
 
@@ -156,8 +152,8 @@ milliseconds per pixel = visible time span / timeline track height
 
 For each application independently, blocks merge when the time between them is
 no more than exactly **24 pixels** at the current zoom level. Individual block
-duration does not affect eligibility. Application blocks never merge across an
-Idle span that remains visible at the current zoom level.
+duration does not affect eligibility. Because Idle is excluded before this
+stage, application blocks may merge across Idle spans.
 
 Blocks are no longer hidden just because they are visually minor, contended, or
 have low active time inside a summarized span. The only display floor is an
@@ -165,17 +161,18 @@ extreme-size guard: a block, or the currently visible clipped portion of it, is
 hidden only when it renders below **2 pixels**.
 
 After same-app summarization, the browser checks whether the merged result would
-require more than three simultaneous lanes. If so, it selectively expands
+require more than five simultaneous lanes. If so, it selectively expands
 summarized blocks back into their underlying base blocks until the lane
 requirement fits. It tries to preserve as much summarization as possible:
 
-- If expanding one summarized block is enough, it picks the smallest such
-  expansion.
-- If no single expansion is enough, it expands the block that reduces lane
-  pressure the most, then repeats.
+- If expanding one summarized block is enough, it picks the one with the
+  shortest summed active duration, then the fewest underlying blocks.
+- If no single expansion is enough, it first expands the block that reduces
+  lane pressure the most, then applies the same duration preference and
+  repeats.
 
 This means lower zoom levels still get looser proximity-based merging, but a
-merge is not kept when its long visual span would create more than three
+merge is not kept when its long visual span would create more than five
 concurrent timeline lanes.
 
 A summarized block has two different duration concepts:
@@ -194,30 +191,50 @@ previous lane when that lane is available. The region’s width is divided by it
 maximum simultaneous overlap, not by the total number of applications that
 appear anywhere in the region.
 
-At most three lanes are displayed:
+At most five lanes are displayed:
 
-- If no more than three blocks overlap simultaneously, lanes are reused freely;
+- If no more than five blocks overlap simultaneously, lanes are reused freely;
   any number of sequential applications can pass through the same lane.
-- If true concurrency still exceeds three after selective merge expansion, the
-  two applications with the greatest summed active duration remain explicit.
+- If true concurrency still exceeds five after selective merge expansion, the
+  four applications with the greatest summed active duration remain explicit.
 - Remaining applications are combined into **Other** blocks that preserve the
   union of their time spans rather than filling the entire overlap region.
 
-Idle ends the current overlap region and remains full width.
+When choosing a summarized block to expand, the browser first prefers an
+expansion that resolves the lane limit. Among equally effective candidates, it
+expands the one with the shortest summed active duration, then the one with
+fewer underlying blocks. If no single expansion resolves the limit, it first
+chooses the expansion that reduces lane pressure most, then applies the same
+shortest-duration preference.
 
 #### 7. Draw and inspect blocks
 
 Time runs vertically from earlier to later. Application colors are assigned by
-bundle identifier for the current browser session; Idle and Other use neutral
-colors.
+selected-day usage: the most-used applications receive the first high-contrast
+colors, while less-used applications receive the remaining palette colors.
+Assignment is stable while the day is live and is recalculated when changing
+days; Other uses a neutral color.
 
 Application names appear when a block is at least approximately 30 pixels tall.
 Additional timing text appears at approximately 54 pixels. Hover text remains
-available for smaller blocks.
+available for smaller blocks, and keyboard focus exposes the same description
+to assistive technology.
 
 Clicking a block opens the detail pane. The pane lists the original
 window-title periods represented by that block. Clicking Other exposes periods
 from all applications grouped into it.
+
+Application rows in the daily aggregate are clickable. Selecting one filters
+the timeline to that bundle while leaving the daily aggregate unchanged; the
+filter persists through zooming and panning and can be cleared above the
+timeline. Changing days clears it.
+
+The detail pane groups exact normalized window titles into subactivity groups.
+Each group shows its period count and union duration. Hovering a group or one of
+its periods highlights the related entries; clicking a group filters the detail
+list, with a **Show all** control to clear that filter. Timeline blocks load
+application icons from the local server and fall back to a generic glyph when
+an icon cannot be found.
 
 ### Daily aggregate
 
@@ -239,10 +256,19 @@ Aggregate values and application bars update as live periods arrive.
 
 ### Navigating the timeline
 
-- **Fit** frames the available activity with a small amount of padding.
+- **Previous** and **Next** move through recorded days. They skip dates with no
+  stored observations.
+- **Today** selects the current local day when it has data; otherwise it selects
+  the newest recorded day.
+- **Fit** frames the first through last non-Idle activity with a small amount of
+  padding. Leading and trailing Idle time is excluded; Idle inside that range
+  remains part of the day’s aggregate.
 - **Day** displays midnight to midnight.
 - **+** and **−** zoom around the center.
 - Scrolling over the timeline zooms around the pointer.
+- Dragging on the time axis selects an interval; releasing zooms to that
+  interval. Selections shorter than one minute are ignored, and Escape cancels
+  the gesture.
 - Dragging empty timeline space pans vertically.
 - The minimum viewport is one minute.
 - After manually zooming or panning, live updates do not reset that viewport.

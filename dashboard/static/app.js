@@ -1,10 +1,15 @@
 const palette = [
-  "#526ed3", "#d16854", "#368b68", "#9a61c7",
-  "#bd842d", "#238894", "#c65388", "#667485"
+  // The first eight are deliberately high-contrast for the most-used apps.
+  "#3f51b5", "#d1495b", "#2a9d8f", "#8e5bb7",
+  "#e09f3e", "#277da1", "#c4457a", "#5f6f89",
+  "#4c956c", "#bc6c25", "#6c5ce7", "#e76f51",
+  "#00a6a6", "#a44a3f", "#577590", "#b56576",
+  "#3a86ff", "#ff006e", "#06d6a0", "#8338ec",
+  "#fb5607", "#118ab2", "#ef476f", "#6a994e"
 ];
 const tinyBlockPixels = 2;
 const proximityMergePixels = 24;
-const maxTimelineLanes = 3;
+const maxTimelineLanes = 5;
 
 const elements = {
   addGoogleCalendar: document.querySelector("#add-google-calendar"),
@@ -21,9 +26,18 @@ const elements = {
   detailMeta: document.querySelector("#detail-meta"),
   fitActivity: document.querySelector("#fit-activity"),
   fullDay: document.querySelector("#full-day"),
+  axisSelection: document.querySelector("#axis-selection"),
+  clearAppFilter: document.querySelector("#clear-app-filter"),
+  timelineFilter: document.querySelector("#timeline-filter"),
+  timelineFilterApp: document.querySelector("#timeline-filter-app"),
+  previousDay: document.querySelector("#previous-day"),
+  nextDay: document.querySelector("#next-day"),
   range: document.querySelector("#range"),
   refresh: document.querySelector("#refresh"),
   status: document.querySelector("#status"),
+  clearSubactivityFilter: document.querySelector("#clear-subactivity-filter"),
+  subactivityFilterLabel: document.querySelector("#subactivity-filter-label"),
+  subactivityControls: document.querySelector("#subactivity-controls"),
   subactivities: document.querySelector("#subactivities"),
   summaryAppCount: document.querySelector("#summary-app-count"),
   summaryApps: document.querySelector("#summary-apps"),
@@ -31,6 +45,7 @@ const elements = {
   summaryMetrics: document.querySelector("#summary-metrics"),
   timeline: document.querySelector("#timeline"),
   total: document.querySelector("#total"),
+  today: document.querySelector("#today"),
   zoomIn: document.querySelector("#zoom-in"),
   zoomOut: document.querySelector("#zoom-out")
 };
@@ -42,6 +57,8 @@ const state = {
   displayBlocks: [],
   colorByApp: new Map(),
   nextColor: 0,
+  appFilter: null,
+  subactivityFilter: null,
   selectedDisplayKey: null,
   viewportStart: null,
   viewportEnd: null,
@@ -89,6 +106,45 @@ function colorFor(bundleIdentifier) {
   return state.colorByApp.get(bundleIdentifier);
 }
 
+function rebuildColorAssignments() {
+  const usage = new Map();
+  for (const period of selectedDayPeriods()) {
+    if (period.bundle_identifier === "__idle__") continue;
+    const entry = usage.get(period.bundle_identifier) || {
+      appName: period.app_name,
+      bundleIdentifier: period.bundle_identifier,
+      firstStart: period.clippedStart,
+      intervals: []
+    };
+    entry.firstStart = Math.min(entry.firstStart, period.clippedStart);
+    entry.intervals.push({
+      start: period.clippedStart,
+      end: period.clippedEnd
+    });
+    usage.set(period.bundle_identifier, entry);
+  }
+
+  const rankedApps = [...usage.values()]
+    .map(app => ({
+      ...app,
+      duration: mergedIntervalDuration(app.intervals)
+    }))
+    .sort((left, right) =>
+      right.duration - left.duration ||
+      left.firstStart - right.firstStart ||
+      left.bundleIdentifier.localeCompare(right.bundleIdentifier)
+    );
+
+  state.colorByApp.clear();
+  state.nextColor = 0;
+  rankedApps.forEach((app, index) => {
+    state.colorByApp.set(
+      app.bundleIdentifier,
+      palette[index % palette.length]
+    );
+  });
+}
+
 function periodIsOnSelectedDay(period) {
   const bounds = dayBounds(elements.day.value);
   return (
@@ -120,6 +176,41 @@ function syncDayOptions() {
   }
 
   if (days.includes(previous)) elements.day.value = previous;
+  updateDayNavigation();
+}
+
+function updateDayNavigation() {
+  const days = availableDays();
+  const index = days.indexOf(elements.day.value);
+  elements.previousDay.disabled = index === -1 || index >= days.length - 1;
+  elements.nextDay.disabled = index <= 0;
+
+  const today = localDay(new Date());
+  const target = days.includes(today) ? today : days[0] || "";
+  elements.today.disabled = !target || elements.day.value === target;
+}
+
+function selectDay(day) {
+  if (!day || !availableDays().includes(day)) return;
+  if (elements.day.value === day) {
+    updateDayNavigation();
+    return;
+  }
+  elements.day.value = day;
+  renderSelectedDay();
+}
+
+function moveDay(direction) {
+  const days = availableDays();
+  const index = days.indexOf(elements.day.value);
+  if (index === -1) return;
+  selectDay(days[index + direction]);
+}
+
+function selectToday() {
+  const days = availableDays();
+  const today = localDay(new Date());
+  selectDay(days.includes(today) ? today : days[0]);
 }
 
 function buildBlocks() {
@@ -127,7 +218,13 @@ function buildBlocks() {
   const bounds = dayBounds(elements.day.value);
 
   state.periods.forEach((period, periodIndex) => {
-    if (!periodIsOnSelectedDay(period)) return;
+    if (
+      !periodIsOnSelectedDay(period) ||
+      period.bundle_identifier === "__idle__" ||
+      (state.appFilter && period.bundle_identifier !== state.appFilter)
+    ) {
+      return;
+    }
     const start = Math.max(new Date(period.start).getTime(), bounds.start);
     const end = Math.min(new Date(period.end).getTime(), bounds.end);
     const previous = state.blocks[state.blocks.length - 1];
@@ -151,21 +248,55 @@ function buildBlocks() {
 }
 
 function buildDisplayBlocks() {
-  const trackHeight = Math.max(1, elements.timeline.clientHeight - 36);
+  const trackHeight = timelineTrackHeight();
   const millisecondsPerPixel =
     (state.viewportEnd - state.viewportStart) / trackHeight;
   const closeGapThreshold = millisecondsPerPixel * proximityMergePixels;
   const tinyBlockThreshold = millisecondsPerPixel * tinyBlockPixels;
 
-  const displayBlocks = summarizeBlocksByApplication(
+  let displayBlocks = summarizeBlocksByApplication(
     tinyBlockThreshold,
     closeGapThreshold
   );
   for (const block of displayBlocks) {
     block.minimumPixels = tinyBlockPixels;
   }
+
+  // Visibility is part of the layout model. Blocks that cannot be seen in
+  // this viewport must not reserve a lane for blocks that can be seen.
+  displayBlocks = displayBlocks.filter(isRenderableAtCurrentViewport);
+
   return assignOverlapLanes(
     limitMergesForLaneCapacity(displayBlocks, maxTimelineLanes)
+  );
+}
+
+function timelineTrackHeight() {
+  return Math.max(1, elements.timeline.clientHeight - 36);
+}
+
+function visiblePixelHeight(block) {
+  if (state.viewportStart === null || state.viewportEnd === null) return 0;
+  const visibleStart = Math.max(block.start, state.viewportStart);
+  const visibleEnd = Math.min(block.end, state.viewportEnd);
+  if (visibleEnd <= visibleStart) return 0;
+  return (
+    (visibleEnd - visibleStart) /
+    (state.viewportEnd - state.viewportStart) *
+    timelineTrackHeight()
+  );
+}
+
+function isRenderableAtCurrentViewport(block) {
+  return visiblePixelHeight(block) >= (block.minimumPixels || tinyBlockPixels);
+}
+
+function compareDisplayBlocks(left, right) {
+  return (
+    left.start - right.start ||
+    left.end - right.end ||
+    left.bundleIdentifier.localeCompare(right.bundleIdentifier) ||
+    left.key.localeCompare(right.key)
   );
 }
 
@@ -254,9 +385,7 @@ function summarizeBlocksByApplication(
     }
   }
 
-  return result.sort((left, right) =>
-    left.start - right.start || left.end - right.end
-  );
+  return result.sort(compareDisplayBlocks);
 }
 
 function normalizeIdleBlocks(ignoredBlockThreshold) {
@@ -329,9 +458,7 @@ function limitMergesForLaneCapacity(blocks, maxLanes) {
       }
     }
 
-    result = next.sort((left, right) =>
-      left.start - right.start || left.end - right.end
-    );
+    result = next.sort(compareDisplayBlocks);
   }
 
   return result;
@@ -367,34 +494,34 @@ function betterExpansionScore(left, right) {
   if (left.fixesCapacity !== right.fixesCapacity) {
     return left.fixesCapacity;
   }
-  if (left.fixesCapacity && left.penalty !== right.penalty) {
-    return left.penalty < right.penalty;
-  }
-  if (left.laneCount !== right.laneCount) {
+  if (!left.fixesCapacity && left.laneCount !== right.laneCount) {
     return left.laneCount < right.laneCount;
+  }
+  if (left.activeDuration !== right.activeDuration) {
+    return left.activeDuration < right.activeDuration;
   }
   if (left.penalty !== right.penalty) {
     return left.penalty < right.penalty;
   }
-  return left.activeDuration < right.activeDuration;
+  return left.laneCount < right.laneCount;
 }
 
 function expandOneSummarizedBlock(blocks, target) {
   const expanded = [];
   for (const block of blocks) {
     if (block === target) {
-      expanded.push(...block.rawIndices.map(index => {
-        const basic = basicDisplayBlock(state.blocks[index], index);
-        basic.minimumPixels = block.minimumPixels ?? tinyBlockPixels;
-        return basic;
-      }));
+      expanded.push(...block.rawIndices
+        .map(index => {
+          const basic = basicDisplayBlock(state.blocks[index], index);
+          basic.minimumPixels = block.minimumPixels ?? tinyBlockPixels;
+          return basic;
+        })
+        .filter(isRenderableAtCurrentViewport));
     } else {
       expanded.push(block);
     }
   }
-  return expanded.sort((left, right) =>
-    left.start - right.start || left.end - right.end
-  );
+  return expanded.sort(compareDisplayBlocks);
 }
 
 function canExpandSummarizedBlock(block) {
@@ -402,7 +529,12 @@ function canExpandSummarizedBlock(block) {
     block.isSummarized &&
     !isInactiveBundle(block.bundleIdentifier) &&
     block.bundleIdentifier !== "__other__" &&
-    block.rawIndices.length > 1
+    block.rawIndices.length > 1 &&
+    block.rawIndices.some(index => {
+      const basic = basicDisplayBlock(state.blocks[index], index);
+      basic.minimumPixels = block.minimumPixels ?? tinyBlockPixels;
+      return isRenderableAtCurrentViewport(basic);
+    })
   );
 }
 
@@ -411,9 +543,7 @@ function activeOverlapComponents(blocks) {
   let current = [];
   let currentEnd = -Infinity;
 
-  for (const block of blocks.slice().sort((left, right) =>
-    left.start - right.start || left.end - right.end
-  )) {
+  for (const block of blocks.slice().sort(compareDisplayBlocks)) {
     if (isInactiveBundle(block.bundleIdentifier)) {
       if (current.length) components.push({ blocks: current });
       components.push({ blocks: [block] });
@@ -437,9 +567,7 @@ function activeOverlapComponents(blocks) {
 
 function intervalLaneCount(blocks) {
   const laneEnds = [];
-  for (const block of blocks.slice().sort((left, right) =>
-    left.start - right.start || left.end - right.end
-  )) {
+  for (const block of blocks.slice().sort(compareDisplayBlocks)) {
     const laneIndex = laneEnds.findIndex(end => end <= block.start);
     if (laneIndex === -1) {
       laneEnds.push(block.end);
@@ -458,18 +586,18 @@ function assignOverlapLanes(blocks) {
   function allocateIntervalLanes(componentBlocks) {
     const laneEnds = [];
     const preferredLaneByBundle = new Map();
-    const ordered = componentBlocks.slice().sort(
-      (left, right) => left.start - right.start || left.end - right.end
-    );
+    const ordered = componentBlocks.slice().sort(compareDisplayBlocks);
 
     for (const block of ordered) {
       const preferredLane = preferredLaneByBundle.get(block.bundleIdentifier);
+      const firstFreeLane = laneEnds.findIndex(end => end <= block.start);
       let laneIndex = (
         preferredLane !== undefined &&
+        preferredLane < laneEnds.length &&
         laneEnds[preferredLane] <= block.start
       )
         ? preferredLane
-        : laneEnds.findIndex(end => end <= block.start);
+        : firstFreeLane;
 
       if (laneIndex === -1) {
         laneIndex = laneEnds.length;
@@ -512,7 +640,7 @@ function assignOverlapLanes(blocks) {
     );
     const overflow = componentBlocks
       .filter(block => !retainedBundles.has(block.bundleIdentifier))
-      .sort((left, right) => left.start - right.start || left.end - right.end);
+      .sort(compareDisplayBlocks);
     const overflowGroups = [];
 
     for (const block of overflow) {
@@ -581,7 +709,9 @@ function assignOverlapLanes(blocks) {
   }
   finishComponent();
 
-  result.sort((left, right) => left.start - right.start || left.laneIndex - right.laneIndex);
+  result.sort((left, right) =>
+    compareDisplayBlocks(left, right) || left.laneIndex - right.laneIndex
+  );
   return result;
 }
 
@@ -597,11 +727,7 @@ function positionBlock(node, block) {
 
   const top = (visibleStart - state.viewportStart) / span * 100;
   const height = (visibleEnd - visibleStart) / span * 100;
-  const pixelHeight = height / 100 * elements.timeline.clientHeight;
-  if (pixelHeight < (block.minimumPixels || tinyBlockPixels)) {
-    node.hidden = true;
-    return;
-  }
+  const pixelHeight = visiblePixelHeight(block);
 
   node.hidden = false;
   node.style.top = `${top}%`;
@@ -627,9 +753,17 @@ function createDisplayNode(block) {
   node.className = `activity-block ${block.kind}`;
   node.dataset.displayKey = block.key;
 
+  const icon = document.createElement("img");
+  icon.className = "activity-block-icon";
+  icon.alt = "";
+  icon.setAttribute("aria-hidden", "true");
+  const fallback = document.createElement("i");
+  fallback.className = "activity-block-icon-fallback";
+  fallback.textContent = "⌘";
+  fallback.setAttribute("aria-hidden", "true");
   const title = document.createElement("strong");
   const meta = document.createElement("span");
-  node.append(title, meta);
+  node.append(icon, fallback, title, meta);
   return node;
 }
 
@@ -648,13 +782,49 @@ function updateDisplayNode(node, block) {
     ? "idle"
     : "active";
   node.style.setProperty("--block-color", color);
+  const icon = node.querySelector(".activity-block-icon");
+  const fallback = node.querySelector(".activity-block-icon-fallback");
+  const hasIcon = block.bundleIdentifier !== "__other__" &&
+    block.bundleIdentifier !== "__idle__";
+  if (hasIcon) {
+    const iconURL =
+      `/api/app-icon?bundle_id=${encodeURIComponent(block.bundleIdentifier)}`;
+    icon.onload = () => {
+      icon.dataset.iconFailed = "false";
+      icon.hidden = false;
+      fallback.hidden = true;
+    };
+    icon.onerror = () => {
+      icon.dataset.iconFailed = "true";
+      icon.hidden = true;
+      fallback.hidden = false;
+    };
+    if (icon.dataset.bundleIdentifier !== block.bundleIdentifier) {
+      icon.dataset.bundleIdentifier = block.bundleIdentifier;
+      icon.dataset.iconFailed = "false";
+      icon.hidden = false;
+      fallback.hidden = true;
+      icon.src = iconURL;
+    } else if (icon.dataset.iconFailed === "true") {
+      icon.hidden = true;
+      fallback.hidden = false;
+    } else {
+      icon.hidden = false;
+      fallback.hidden = true;
+    }
+  } else {
+    icon.hidden = true;
+    fallback.hidden = false;
+  }
   node.querySelector("strong").textContent = block.appName;
   node.querySelector("span").textContent =
     `${formatClock(block.start)} · ${formatDuration(block.activeDuration)} ${durationKind}`;
-  node.title =
+  const description =
     `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}` +
     `\n${formatDuration(block.activeDuration)} total ${durationKind} time` +
     (block.isSummarized ? `\nSummarized from ${block.rawIndices.length} blocks` : "");
+  node.title = description;
+  node.setAttribute("aria-label", description.replaceAll("\n", ", "));
 
   positionBlock(node, block);
 }
@@ -731,18 +901,55 @@ function setViewport(start, end, { follow = false } = {}) {
   repositionBlocks();
 }
 
+function timelineRatioAt(clientY) {
+  const bounds = elements.timeline.getBoundingClientRect();
+  const trackTop = bounds.top + 18;
+  return Math.max(
+    0,
+    Math.min(1, (clientY - trackTop) / timelineTrackHeight())
+  );
+}
+
+function updateAxisSelection(startRatio, endRatio) {
+  const top = 18 + Math.min(startRatio, endRatio) * timelineTrackHeight();
+  const height = Math.abs(endRatio - startRatio) * timelineTrackHeight();
+  elements.axisSelection.hidden = height <= 0;
+  elements.axisSelection.style.top = `${top}px`;
+  elements.axisSelection.style.height = `${height}px`;
+}
+
+function clearAxisSelection() {
+  elements.axisSelection.hidden = true;
+  elements.axisSelection.style.removeProperty("top");
+  elements.axisSelection.style.removeProperty("height");
+}
+
 function fitActivity({ render = true } = {}) {
   const bounds = dayBounds(elements.day.value);
+  const activePeriods = selectedDayPeriods().filter(
+    period => period.bundle_identifier !== "__idle__"
+  );
 
-  if (!state.blocks.length) {
+  if (!activePeriods.length) {
     state.viewportStart = bounds.start;
     state.viewportEnd = bounds.end;
   } else {
-    const first = state.blocks[0].start;
-    const last = state.blocks[state.blocks.length - 1].end;
+    const first = activePeriods[0].clippedStart;
+    const last = activePeriods[activePeriods.length - 1].clippedEnd;
     const padding = Math.max(60_000, (last - first) * 0.08);
-    state.viewportStart = Math.max(bounds.start, first - padding);
-    state.viewportEnd = Math.min(bounds.end, last + padding);
+    let start = Math.max(bounds.start, first - padding);
+    let end = Math.min(bounds.end, last + padding);
+    const minimumSpan = 60_000;
+
+    if (end - start < minimumSpan) {
+      const center = (start + end) / 2;
+      start = Math.max(bounds.start, center - minimumSpan / 2);
+      end = Math.min(bounds.end, start + minimumSpan);
+      start = Math.max(bounds.start, end - minimumSpan);
+    }
+
+    state.viewportStart = start;
+    state.viewportEnd = end;
   }
 
   state.followingLiveEdge = true;
@@ -765,14 +972,51 @@ function zoom(factor, centerRatio = 0.5) {
 }
 
 function renderSummary() {
-  const observed = state.blocks.reduce(
-    (total, block) => total + block.end - block.start,
-    0
-  );
+  const observed = selectedDayActiveDuration();
   elements.status.textContent =
     `${state.observationCount.toLocaleString()} stored observations · live`;
   elements.total.textContent =
     `${state.displayBlocks.length} visible blocks · ${formatDuration(observed)} observed`;
+  renderTimelineFilter();
+}
+
+function appNameForBundle(bundleIdentifier) {
+  const period = selectedDayPeriods().find(
+    candidate => candidate.bundle_identifier === bundleIdentifier
+  );
+  return period?.app_name || bundleIdentifier;
+}
+
+function renderTimelineFilter() {
+  const active = Boolean(state.appFilter);
+  elements.timelineFilter.hidden = !active;
+  if (active) {
+    elements.timelineFilterApp.textContent = appNameForBundle(state.appFilter);
+  }
+}
+
+function setAppFilter(bundleIdentifier) {
+  if (!bundleIdentifier || state.appFilter === bundleIdentifier) return;
+  state.appFilter = bundleIdentifier;
+  state.selectedDisplayKey = null;
+  state.subactivityFilter = null;
+  buildBlocks();
+  renderDisplayBlocks();
+  renderSummary();
+  renderDailySummary();
+  renderDetail();
+}
+
+function clearAppFilter() {
+  if (!state.appFilter) return;
+  state.appFilter = null;
+  state.selectedDisplayKey = null;
+  state.subactivityFilter = null;
+  buildBlocks();
+  renderDisplayBlocks();
+  renderSummary();
+  renderDailySummary();
+  renderDetail();
 }
 
 function mergedIntervalDuration(intervals) {
@@ -807,6 +1051,17 @@ function selectedDayPeriods() {
     }))
     .filter(period => period.clippedEnd > period.clippedStart)
     .sort((left, right) => left.clippedStart - right.clippedStart);
+}
+
+function selectedDayActiveDuration() {
+  return mergedIntervalDuration(
+    selectedDayPeriods()
+      .filter(period => period.bundle_identifier !== "__idle__")
+      .map(period => ({
+        start: period.clippedStart,
+        end: period.clippedEnd
+      }))
+  );
 }
 
 function addSummaryMetric(value, label) {
@@ -896,8 +1151,11 @@ function renderDailySummary() {
     const percentage = activeDuration > 0
       ? Math.min(100, app.duration / activeDuration * 100)
       : 0;
-    const row = document.createElement("div");
+    const row = document.createElement("button");
+    row.type = "button";
     row.className = "summary-app-row";
+    row.classList.toggle("active", state.appFilter === app.bundleIdentifier);
+    row.addEventListener("click", () => setAppFilter(app.bundleIdentifier));
 
     const label = document.createElement("div");
     label.className = "summary-app-label";
@@ -937,14 +1195,66 @@ function renderDailySummary() {
   }
 }
 
+function normalizeWindowTitle(value) {
+  const normalized = String(value || "").trim().replace(/\s+/g, " ");
+  return normalized || "No window title";
+}
+
+function buildSubactivityGroups(periodIndices, block) {
+  const groups = new Map();
+  for (const periodIndex of periodIndices) {
+    const period = state.periods[periodIndex];
+    const title = normalizeWindowTitle(period.window_title);
+    const bundleIdentifier = block.bundleIdentifier === "__other__"
+      ? period.bundle_identifier
+      : block.bundleIdentifier;
+    const key = `${bundleIdentifier}|${title}`;
+    const group = groups.get(key) || {
+      key,
+      label: block.bundleIdentifier === "__other__"
+        ? `${period.app_name} — ${title}`
+        : title,
+      periodIndices: [],
+      intervals: []
+    };
+    group.periodIndices.push(periodIndex);
+    group.intervals.push({
+      start: new Date(period.start).getTime(),
+      end: new Date(period.end).getTime()
+    });
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .map(group => ({
+      ...group,
+      activeDuration: mergedIntervalDuration(group.intervals)
+    }))
+    .sort((left, right) =>
+      right.activeDuration - left.activeDuration ||
+      left.label.localeCompare(right.label)
+    );
+}
+
+function setSubactivityHighlight(groupKey, highlighted) {
+  for (const node of elements.subactivities.querySelectorAll("[data-group-key]")) {
+    node.classList.toggle(
+      "highlighted",
+      highlighted && node.dataset.groupKey === groupKey
+    );
+  }
+}
+
 function renderDetail() {
   const block = state.displayBlocks.find(
     candidate => candidate.key === state.selectedDisplayKey
   );
   if (!block) {
+    state.subactivityFilter = null;
     elements.detailEmpty.hidden = false;
     elements.detailContent.hidden = true;
     elements.calendarStatus.textContent = "";
+    elements.subactivityControls.hidden = true;
     return;
   }
 
@@ -982,30 +1292,77 @@ function renderDetail() {
   elements.calendarStatus.classList.remove("error");
   elements.subactivities.replaceChildren();
 
-  for (const periodIndex of periodIndices) {
-    const period = state.periods[periodIndex];
-    const row = document.createElement("article");
-    const start = new Date(period.start).getTime();
-    const end = new Date(period.end).getTime();
-    row.className = "subactivity";
+  const groups = buildSubactivityGroups(periodIndices, block);
+  const selectedGroup = groups.find(
+    group => group.key === state.subactivityFilter
+  );
+  if (state.subactivityFilter && !selectedGroup) {
+    state.subactivityFilter = null;
+  }
+  elements.subactivityControls.hidden = !state.subactivityFilter;
+  if (state.subactivityFilter) {
+    elements.subactivityFilterLabel.textContent =
+      `Filtered to “${selectedGroup.label}”`;
+  }
 
-    const marker = document.createElement("i");
-    marker.style.background = period.bundle_identifier === "__idle__"
-      ? "#a5a19a"
-      : colorFor(period.bundle_identifier);
-    const content = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = period.bundle_identifier === "__idle__"
-      ? "No input detected"
-      : block.bundleIdentifier === "__other__"
-      ? `${period.app_name} — ${period.window_title || "No window title"}`
-      : period.window_title || "No window title";
-    const time = document.createElement("span");
-    time.textContent =
-      `${formatClock(start)}–${formatClock(end)} · ${formatDuration(end - start)}`;
-    content.append(title, time);
-    row.append(marker, content);
-    elements.subactivities.append(row);
+  for (const group of groups) {
+    if (state.subactivityFilter && group.key !== state.subactivityFilter) {
+      continue;
+    }
+
+    const groupRow = document.createElement("button");
+    groupRow.type = "button";
+    groupRow.className = "subactivity-group";
+    groupRow.dataset.groupKey = group.key;
+    groupRow.classList.toggle("selected", group.key === state.subactivityFilter);
+    groupRow.addEventListener("mouseenter", () =>
+      setSubactivityHighlight(group.key, true)
+    );
+    groupRow.addEventListener("mouseleave", () =>
+      setSubactivityHighlight(group.key, false)
+    );
+    groupRow.addEventListener("click", () => {
+      state.subactivityFilter = group.key;
+      renderDetail();
+    });
+
+    const groupTitle = document.createElement("strong");
+    groupTitle.textContent = group.label;
+    const groupTime = document.createElement("span");
+    groupTime.textContent =
+      `${group.periodIndices.length} ${group.periodIndices.length === 1 ? "period" : "periods"} · ` +
+      `${formatDuration(group.activeDuration)}`;
+    groupRow.append(groupTitle, groupTime);
+    elements.subactivities.append(groupRow);
+
+    for (const periodIndex of group.periodIndices) {
+      const period = state.periods[periodIndex];
+      const row = document.createElement("article");
+      const start = new Date(period.start).getTime();
+      const end = new Date(period.end).getTime();
+      row.className = "subactivity";
+      row.dataset.groupKey = group.key;
+      row.addEventListener("mouseenter", () =>
+        setSubactivityHighlight(group.key, true)
+      );
+      row.addEventListener("mouseleave", () =>
+        setSubactivityHighlight(group.key, false)
+      );
+
+      const marker = document.createElement("i");
+      marker.style.background = colorFor(period.bundle_identifier);
+      const content = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = block.bundleIdentifier === "__other__"
+        ? `${period.app_name} — ${normalizeWindowTitle(period.window_title)}`
+        : normalizeWindowTitle(period.window_title);
+      const time = document.createElement("span");
+      time.textContent =
+        `${formatClock(start)}–${formatClock(end)} · ${formatDuration(end - start)}`;
+      content.append(title, time);
+      row.append(marker, content);
+      elements.subactivities.append(row);
+    }
   }
 }
 
@@ -1077,8 +1434,11 @@ function selectBlock(displayKey) {
 }
 
 function renderSelectedDay() {
+  state.appFilter = null;
+  state.subactivityFilter = null;
   state.selectedDisplayKey = null;
   buildBlocks();
+  rebuildColorAssignments();
   fitActivity({ render: false });
   elements.blocks.replaceChildren();
   renderDisplayBlocks();
@@ -1086,6 +1446,7 @@ function renderSelectedDay() {
   renderSummary();
   renderDailySummary();
   renderDetail();
+  updateDayNavigation();
 }
 
 function applySnapshot(payload) {
@@ -1097,7 +1458,13 @@ function applySnapshot(payload) {
 
 function appendOrUpdateBlock(periodIndex, previousPeriod) {
   const period = state.periods[periodIndex];
-  if (!periodIsOnSelectedDay(period)) return;
+  if (
+    period.bundle_identifier === "__idle__" ||
+    (state.appFilter && period.bundle_identifier !== state.appFilter) ||
+    !periodIsOnSelectedDay(period)
+  ) {
+    return;
+  }
 
   if (previousPeriod) {
     const blockIndex = state.blocks.findIndex(block =>
@@ -1197,7 +1564,18 @@ elements.addGoogleCalendar.addEventListener(
   "click",
   addSelectedActivityToGoogleCalendar
 );
-elements.day.addEventListener("change", renderSelectedDay);
+elements.day.addEventListener("change", () => {
+  renderSelectedDay();
+  updateDayNavigation();
+});
+elements.previousDay.addEventListener("click", () => moveDay(1));
+elements.nextDay.addEventListener("click", () => moveDay(-1));
+elements.today.addEventListener("click", selectToday);
+elements.clearAppFilter.addEventListener("click", clearAppFilter);
+elements.clearSubactivityFilter.addEventListener("click", () => {
+  state.subactivityFilter = null;
+  renderDetail();
+});
 elements.fitActivity.addEventListener("click", () => fitActivity());
 elements.fullDay.addEventListener("click", showFullDay);
 elements.zoomIn.addEventListener("click", () => zoom(0.5));
@@ -1215,6 +1593,60 @@ elements.timeline.addEventListener("wheel", event => {
   const bounds = elements.timeline.getBoundingClientRect();
   zoom(Math.exp(event.deltaY * 0.002), (event.clientY - bounds.top) / bounds.height);
 }, { passive: false });
+
+let axisDrag = null;
+elements.axis.addEventListener("pointerdown", event => {
+  if (state.viewportStart === null || state.viewportEnd === null) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const ratio = timelineRatioAt(event.clientY);
+  axisDrag = {
+    pointerId: event.pointerId,
+    startRatio: ratio,
+    currentRatio: ratio
+  };
+  elements.axis.setPointerCapture(event.pointerId);
+  updateAxisSelection(ratio, ratio);
+});
+elements.axis.addEventListener("pointermove", event => {
+  if (!axisDrag || event.pointerId !== axisDrag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  axisDrag.currentRatio = timelineRatioAt(event.clientY);
+  updateAxisSelection(axisDrag.startRatio, axisDrag.currentRatio);
+});
+
+function finishAxisDrag(event, cancelled = false) {
+  if (!axisDrag || event.pointerId !== axisDrag.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const selection = axisDrag;
+  axisDrag = null;
+  if (elements.axis.hasPointerCapture(event.pointerId)) {
+    elements.axis.releasePointerCapture(event.pointerId);
+  }
+  clearAxisSelection();
+
+  if (cancelled) return;
+  const startRatio = Math.min(selection.startRatio, selection.currentRatio);
+  const endRatio = Math.max(selection.startRatio, selection.currentRatio);
+  const span = state.viewportEnd - state.viewportStart;
+  const start = state.viewportStart + span * startRatio;
+  const end = state.viewportStart + span * endRatio;
+  if (end - start >= 60_000) setViewport(start, end);
+}
+
+elements.axis.addEventListener("pointerup", event => finishAxisDrag(event));
+elements.axis.addEventListener("pointercancel", event => finishAxisDrag(event, true));
+window.addEventListener("keydown", event => {
+  if (event.key === "Escape" && axisDrag) {
+    finishAxisDrag({
+      pointerId: axisDrag.pointerId,
+      preventDefault() {},
+      stopPropagation() {}
+    }, true);
+  }
+});
 
 let drag = null;
 elements.timeline.addEventListener("pointerdown", event => {
