@@ -56,6 +56,7 @@ const state = {
   blocks: [],
   displayBlocks: [],
   colorByApp: new Map(),
+  usageRankByApp: new Map(),
   nextColor: 0,
   appFilter: null,
   subactivityFilter: null,
@@ -136,8 +137,10 @@ function rebuildColorAssignments() {
     );
 
   state.colorByApp.clear();
+  state.usageRankByApp.clear();
   state.nextColor = 0;
   rankedApps.forEach((app, index) => {
+    state.usageRankByApp.set(app.bundleIdentifier, index);
     state.colorByApp.set(
       app.bundleIdentifier,
       palette[index % palette.length]
@@ -292,8 +295,11 @@ function isRenderableAtCurrentViewport(block) {
 }
 
 function compareDisplayBlocks(left, right) {
+  const leftRank = state.usageRankByApp.get(left.bundleIdentifier) ?? Infinity;
+  const rightRank = state.usageRankByApp.get(right.bundleIdentifier) ?? Infinity;
   return (
     left.start - right.start ||
+    leftRank - rightRank ||
     left.end - right.end ||
     left.bundleIdentifier.localeCompare(right.bundleIdentifier) ||
     left.key.localeCompare(right.key)

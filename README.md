@@ -191,6 +191,11 @@ previous lane when that lane is available. The region’s width is divided by it
 maximum simultaneous overlap, not by the total number of applications that
 appear anywhere in the region.
 
+When competing intervals begin at the same time, the selected-day usage
+ranking is used as a tie-breaker, so more-used applications tend to receive the
+leftmost available lanes. Existing lane continuity and compactness take
+priority over a rigid global app-to-lane assignment.
+
 At most five lanes are displayed:
 
 - If no more than five blocks overlap simultaneously, lanes are reused freely;

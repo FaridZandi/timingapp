@@ -398,10 +398,6 @@ button { cursor: pointer; }
 .activity-block.has-label > span {
   grid-column: 2;
 }
-  display: block;
-  font-size: 12px;
-  line-height: 15px;
-}
 
 .activity-block.has-time span {
   display: block;
