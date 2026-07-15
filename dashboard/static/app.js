@@ -35,9 +35,6 @@ const elements = {
   range: document.querySelector("#range"),
   refresh: document.querySelector("#refresh"),
   status: document.querySelector("#status"),
-  clearSubactivityFilter: document.querySelector("#clear-subactivity-filter"),
-  subactivityFilterLabel: document.querySelector("#subactivity-filter-label"),
-  subactivityControls: document.querySelector("#subactivity-controls"),
   subactivities: document.querySelector("#subactivities"),
   summaryAppCount: document.querySelector("#summary-app-count"),
   summaryApps: document.querySelector("#summary-apps"),
@@ -59,7 +56,7 @@ const state = {
   usageRankByApp: new Map(),
   nextColor: 0,
   appFilter: null,
-  subactivityFilter: null,
+  expandedSubactivityGroups: new Set(),
   selectedDisplayKey: null,
   viewportStart: null,
   viewportEnd: null,
@@ -1008,7 +1005,7 @@ function setAppFilter(bundleIdentifier) {
   if (!bundleIdentifier || state.appFilter === bundleIdentifier) return;
   state.appFilter = bundleIdentifier;
   state.selectedDisplayKey = null;
-  state.subactivityFilter = null;
+  state.expandedSubactivityGroups.clear();
   buildBlocks();
   renderDisplayBlocks();
   renderSummary();
@@ -1020,7 +1017,7 @@ function clearAppFilter() {
   if (!state.appFilter) return;
   state.appFilter = null;
   state.selectedDisplayKey = null;
-  state.subactivityFilter = null;
+  state.expandedSubactivityGroups.clear();
   buildBlocks();
   renderDisplayBlocks();
   renderSummary();
@@ -1259,11 +1256,10 @@ function renderDetail() {
     candidate => candidate.key === state.selectedDisplayKey
   );
   if (!block) {
-    state.subactivityFilter = null;
+    state.expandedSubactivityGroups.clear();
     elements.detailEmpty.hidden = false;
     elements.detailContent.hidden = true;
     elements.calendarStatus.textContent = "";
-    elements.subactivityControls.hidden = true;
     return;
   }
 
@@ -1302,28 +1298,22 @@ function renderDetail() {
   elements.subactivities.replaceChildren();
 
   const groups = buildSubactivityGroups(periodIndices, block);
-  const selectedGroup = groups.find(
-    group => group.key === state.subactivityFilter
-  );
-  if (state.subactivityFilter && !selectedGroup) {
-    state.subactivityFilter = null;
-  }
-  elements.subactivityControls.hidden = !state.subactivityFilter;
-  if (state.subactivityFilter) {
-    elements.subactivityFilterLabel.textContent =
-      `Filtered to “${selectedGroup.label}”`;
+  const visibleGroupKeys = new Set(groups.map(group => group.key));
+  for (const key of state.expandedSubactivityGroups) {
+    if (!visibleGroupKeys.has(key)) state.expandedSubactivityGroups.delete(key);
   }
 
-  for (const group of groups) {
-    if (state.subactivityFilter && group.key !== state.subactivityFilter) {
-      continue;
-    }
+  for (const [groupIndex, group] of groups.entries()) {
+    const expanded = state.expandedSubactivityGroups.has(group.key);
+    const contentsId = `subactivity-group-contents-${groupIndex}`;
 
     const groupRow = document.createElement("button");
     groupRow.type = "button";
     groupRow.className = "subactivity-group";
     groupRow.dataset.groupKey = group.key;
-    groupRow.classList.toggle("selected", group.key === state.subactivityFilter);
+    groupRow.classList.toggle("expanded", expanded);
+    groupRow.setAttribute("aria-expanded", String(expanded));
+    groupRow.setAttribute("aria-controls", contentsId);
     groupRow.addEventListener("mouseenter", () =>
       setSubactivityHighlight(group.key, true)
     );
@@ -1331,7 +1321,11 @@ function renderDetail() {
       setSubactivityHighlight(group.key, false)
     );
     groupRow.addEventListener("click", () => {
-      state.subactivityFilter = group.key;
+      if (state.expandedSubactivityGroups.has(group.key)) {
+        state.expandedSubactivityGroups.delete(group.key);
+      } else {
+        state.expandedSubactivityGroups.add(group.key);
+      }
       renderDetail();
     });
 
@@ -1344,34 +1338,41 @@ function renderDetail() {
     groupRow.append(groupTitle, groupTime);
     elements.subactivities.append(groupRow);
 
-    for (const periodIndex of group.periodIndices) {
-      const period = state.periods[periodIndex];
-      const row = document.createElement("article");
-      const start = new Date(period.start).getTime();
-      const end = new Date(period.end).getTime();
-      row.className = "subactivity";
-      row.dataset.groupKey = group.key;
-      row.addEventListener("mouseenter", () =>
-        setSubactivityHighlight(group.key, true)
-      );
-      row.addEventListener("mouseleave", () =>
-        setSubactivityHighlight(group.key, false)
-      );
+    const contents = document.createElement("div");
+    contents.className = "subactivity-group-contents";
+    contents.id = contentsId;
+    contents.hidden = !expanded;
+    if (expanded) {
+      for (const periodIndex of group.periodIndices) {
+        const period = state.periods[periodIndex];
+        const row = document.createElement("article");
+        const start = new Date(period.start).getTime();
+        const end = new Date(period.end).getTime();
+        row.className = "subactivity";
+        row.dataset.groupKey = group.key;
+        row.addEventListener("mouseenter", () =>
+          setSubactivityHighlight(group.key, true)
+        );
+        row.addEventListener("mouseleave", () =>
+          setSubactivityHighlight(group.key, false)
+        );
 
-      const marker = document.createElement("i");
-      marker.style.background = colorFor(period.bundle_identifier);
-      const content = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = block.bundleIdentifier === "__other__"
-        ? `${period.app_name} — ${normalizeWindowTitle(period.window_title)}`
-        : normalizeWindowTitle(period.window_title);
-      const time = document.createElement("span");
-      time.textContent =
-        `${formatClock(start)}–${formatClock(end)} · ${formatDuration(end - start)}`;
-      content.append(title, time);
-      row.append(marker, content);
-      elements.subactivities.append(row);
+        const marker = document.createElement("i");
+        marker.style.background = colorFor(period.bundle_identifier);
+        const content = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = block.bundleIdentifier === "__other__"
+          ? `${period.app_name} — ${normalizeWindowTitle(period.window_title)}`
+          : normalizeWindowTitle(period.window_title);
+        const time = document.createElement("span");
+        time.textContent =
+          `${formatClock(start)}–${formatClock(end)} · ${formatDuration(end - start)}`;
+        content.append(title, time);
+        row.append(marker, content);
+        contents.append(row);
+      }
     }
+    elements.subactivities.append(contents);
   }
 }
 
@@ -1435,6 +1436,9 @@ async function addSelectedActivityToGoogleCalendar() {
 function selectBlock(displayKey) {
   const previous = elements.blocks.querySelector(".activity-block.selected");
   previous?.classList.remove("selected");
+  if (state.selectedDisplayKey !== displayKey) {
+    state.expandedSubactivityGroups.clear();
+  }
   state.selectedDisplayKey = displayKey;
   const next = [...elements.blocks.querySelectorAll(".activity-block")]
     .find(node => node.dataset.displayKey === displayKey);
@@ -1444,7 +1448,7 @@ function selectBlock(displayKey) {
 
 function renderSelectedDay() {
   state.appFilter = null;
-  state.subactivityFilter = null;
+  state.expandedSubactivityGroups.clear();
   state.selectedDisplayKey = null;
   buildBlocks();
   rebuildColorAssignments();
@@ -1581,10 +1585,6 @@ elements.previousDay.addEventListener("click", () => moveDay(1));
 elements.nextDay.addEventListener("click", () => moveDay(-1));
 elements.today.addEventListener("click", selectToday);
 elements.clearAppFilter.addEventListener("click", clearAppFilter);
-elements.clearSubactivityFilter.addEventListener("click", () => {
-  state.subactivityFilter = null;
-  renderDetail();
-});
 elements.fitActivity.addEventListener("click", () => fitActivity());
 elements.fullDay.addEventListener("click", showFullDay);
 elements.zoomIn.addEventListener("click", () => zoom(0.5));
