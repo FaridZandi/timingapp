@@ -12,8 +12,9 @@ open "build/Activity Probe.app"
 ```
 
 The build script creates an ad-hoc-signed app suitable for local development.
-The app has no Dock icon; use its clock icon in the menu bar to open the
-timeline in your browser, pause tracking, reveal the data file, or quit.
+The app has no Dock icon; its local dashboard server starts when the app
+launches. Use the clock icon in the menu bar to open the timeline in your
+browser, pause tracking, reveal the data file, or quit.
 
 Do not keep the old `swift run activity-probe` process running after switching
 to the app.
@@ -235,11 +236,11 @@ filter persists through zooming and panning and can be cleared above the
 timeline. Changing days clears it.
 
 The detail pane groups exact normalized window titles into subactivity groups.
-Each group shows its period count and union duration. Hovering a group or one of
-its periods highlights the related entries; clicking a group filters the detail
-list, with a **Show all** control to clear that filter. Timeline blocks load
-application icons from the local server and fall back to a generic glyph when
-an icon cannot be found.
+Each group is collapsed by default and shows its period count and union
+duration. Clicking a group expands its original periods inline; groups can be
+expanded independently. Hovering a group or one of its periods highlights the
+related entries. Timeline blocks load application icons from the local server
+and fall back to a generic glyph when an icon cannot be found.
 
 ### Daily aggregate
 
@@ -265,6 +266,11 @@ Aggregate values and application bars update as live periods arrive.
   stored observations.
 - **Today** selects the current local day when it has data; otherwise it selects
   the newest recorded day.
+- **Day / Week** switches between the detailed single-day timeline and a
+  seven-column Monday–Sunday overview. Weekly columns use fixed 15-minute
+  buckets, choose the application with the greatest active duration in each
+  bucket, and merge adjacent buckets from the same app. Clicking a day label or
+  weekly block returns to that day’s detailed timeline.
 - **Fit** frames the first through last non-Idle activity with a small amount of
   padding. Leading and trailing Idle time is excluded; Idle inside that range
   remains part of the day’s aggregate.

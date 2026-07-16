@@ -23,7 +23,10 @@ const elements = {
   detailContent: document.querySelector("#detail-content"),
   detailCount: document.querySelector("#detail-count"),
   detailEmpty: document.querySelector("#detail-empty"),
+  detailEmptyDescription: document.querySelector("#detail-empty-description"),
+  detailEmptyTitle: document.querySelector("#detail-empty-title"),
   detailMeta: document.querySelector("#detail-meta"),
+  dayView: document.querySelector("#day-view"),
   fitActivity: document.querySelector("#fit-activity"),
   fullDay: document.querySelector("#full-day"),
   axisSelection: document.querySelector("#axis-selection"),
@@ -43,6 +46,8 @@ const elements = {
   timeline: document.querySelector("#timeline"),
   total: document.querySelector("#total"),
   today: document.querySelector("#today"),
+  weekDayLabels: document.querySelector("#week-day-labels"),
+  weekView: document.querySelector("#week-view"),
   zoomIn: document.querySelector("#zoom-in"),
   zoomOut: document.querySelector("#zoom-out")
 };
@@ -57,6 +62,8 @@ const state = {
   nextColor: 0,
   appFilter: null,
   expandedSubactivityGroups: new Set(),
+  mode: "day",
+  weeklyBlocks: [],
   selectedDisplayKey: null,
   viewportStart: null,
   viewportEnd: null,
@@ -75,6 +82,77 @@ function dayBounds(day) {
     start: new Date(`${day}T00:00:00`).getTime(),
     end: new Date(`${day}T24:00:00`).getTime()
   };
+}
+
+function startOfLocalWeek(date) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const mondayOffset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - mondayOffset);
+  return start;
+}
+
+function weekKeyForDay(day) {
+  return localDay(startOfLocalWeek(new Date(`${day}T12:00:00`)));
+}
+
+function selectedWeekBounds() {
+  const start = startOfLocalWeek(
+    new Date(`${elements.day.value}T12:00:00`)
+  );
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+function selectedWeekDays() {
+  const start = startOfLocalWeek(
+    new Date(`${elements.day.value}T12:00:00`)
+  );
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(date.getDate() + index);
+    const day = localDay(date);
+    const bounds = dayBounds(day);
+    return { day, ...bounds, index };
+  });
+}
+
+function availableWeekEntries() {
+  const entries = new Map();
+  for (const day of availableDays()) {
+    const week = weekKeyForDay(day);
+    const days = entries.get(week) || [];
+    days.push(day);
+    entries.set(week, days);
+  }
+  return [...entries.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([week, days]) => ({ week, anchor: days[days.length - 1] }));
+}
+
+function formatWeekLabel(day) {
+  return new Intl.DateTimeFormat([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(`${day}T12:00:00`));
+}
+
+function formatWeekRange(days) {
+  if (!days.length) return "";
+  const first = new Date(`${days[0].day}T12:00:00`);
+  const last = new Date(`${days[days.length - 1].day}T12:00:00`);
+  const firstLabel = new Intl.DateTimeFormat([], {
+    month: "short",
+    day: "numeric"
+  }).format(first);
+  const lastLabel = new Intl.DateTimeFormat([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(last);
+  return `${firstLabel}–${lastLabel}`;
 }
 
 function formatClock(value) {
@@ -106,7 +184,7 @@ function colorFor(bundleIdentifier) {
 
 function rebuildColorAssignments() {
   const usage = new Map();
-  for (const period of selectedDayPeriods()) {
+  for (const period of selectedViewPeriods()) {
     if (period.bundle_identifier === "__idle__") continue;
     const entry = usage.get(period.bundle_identifier) || {
       appName: period.app_name,
@@ -180,13 +258,31 @@ function syncDayOptions() {
 }
 
 function updateDayNavigation() {
-  const days = availableDays();
-  const index = days.indexOf(elements.day.value);
-  elements.previousDay.disabled = index === -1 || index >= days.length - 1;
-  elements.nextDay.disabled = index <= 0;
+  if (state.mode === "week") {
+    const weeks = availableWeekEntries();
+    const index = weeks.findIndex(({ week }) =>
+      week === weekKeyForDay(elements.day.value)
+    );
+    elements.previousDay.disabled = index === -1 || index >= weeks.length - 1;
+    elements.nextDay.disabled = index <= 0;
+    elements.previousDay.title = "Previous recorded week";
+    elements.nextDay.title = "Next recorded week";
+  } else {
+    const days = availableDays();
+    const index = days.indexOf(elements.day.value);
+    elements.previousDay.disabled = index === -1 || index >= days.length - 1;
+    elements.nextDay.disabled = index <= 0;
+    elements.previousDay.title = "Previous recorded day";
+    elements.nextDay.title = "Next recorded day";
+  }
 
+  const days = availableDays();
   const today = localDay(new Date());
-  const target = days.includes(today) ? today : days[0] || "";
+  const target = state.mode === "week"
+    ? availableWeekEntries().find(({ week }) => week === weekKeyForDay(today))?.anchor
+      || availableWeekEntries()[0]?.anchor
+      || ""
+    : days.includes(today) ? today : days[0] || "";
   elements.today.disabled = !target || elements.day.value === target;
 }
 
@@ -197,10 +293,26 @@ function selectDay(day) {
     return;
   }
   elements.day.value = day;
-  renderSelectedDay();
+  if (state.mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderDailySummary();
+    renderDetail();
+    updateDayNavigation();
+  } else {
+    renderSelectedDay();
+  }
 }
 
 function moveDay(direction) {
+  if (state.mode === "week") {
+    const weeks = availableWeekEntries();
+    const index = weeks.findIndex(({ week }) =>
+      week === weekKeyForDay(elements.day.value)
+    );
+    selectDay(weeks[index + direction]?.anchor);
+    return;
+  }
   const days = availableDays();
   const index = days.indexOf(elements.day.value);
   if (index === -1) return;
@@ -208,6 +320,14 @@ function moveDay(direction) {
 }
 
 function selectToday() {
+  if (state.mode === "week") {
+    const today = localDay(new Date());
+    const target = availableWeekEntries().find(({ week }) =>
+      week === weekKeyForDay(today)
+    )?.anchor || availableWeekEntries()[0]?.anchor;
+    selectDay(target);
+    return;
+  }
   const days = availableDays();
   const today = localDay(new Date());
   selectDay(days.includes(today) ? today : days[0]);
@@ -868,8 +988,169 @@ function renderDisplayBlocks() {
   }
 }
 
+function buildWeeklyBlocks() {
+  const days = selectedWeekDays();
+  const periods = selectedWeekPeriods().filter(period =>
+    period.bundle_identifier !== "__idle__" &&
+    (!state.appFilter || period.bundle_identifier === state.appFilter)
+  );
+  const result = [];
+  const bucketSize = 15 * 60 * 1000;
+
+  for (const day of days) {
+    let previous = null;
+    for (
+      let bucketStart = day.start;
+      bucketStart < day.end;
+      bucketStart += bucketSize
+    ) {
+      const bucketEnd = Math.min(day.end, bucketStart + bucketSize);
+      const durations = new Map();
+
+      for (const period of periods) {
+        const start = Math.max(period.clippedStart, bucketStart);
+        const end = Math.min(period.clippedEnd, bucketEnd);
+        if (end <= start) continue;
+        const entry = durations.get(period.bundle_identifier) || {
+          appName: period.app_name,
+          bundleIdentifier: period.bundle_identifier,
+          duration: 0,
+          firstStart: start
+        };
+        entry.duration += end - start;
+        entry.firstStart = Math.min(entry.firstStart, start);
+        durations.set(period.bundle_identifier, entry);
+      }
+
+      const candidates = [...durations.values()]
+        .sort((left, right) =>
+          right.duration - left.duration ||
+          (state.usageRankByApp.get(left.bundleIdentifier) ?? Infinity) -
+            (state.usageRankByApp.get(right.bundleIdentifier) ?? Infinity) ||
+          left.firstStart - right.firstStart ||
+          left.bundleIdentifier.localeCompare(right.bundleIdentifier)
+        );
+      const winner = candidates[0];
+      if (!winner) {
+        previous = null;
+        continue;
+      }
+
+      const totalActiveDuration = candidates.reduce(
+        (total, candidate) => total + candidate.duration,
+        0
+      );
+      if (
+        previous &&
+        previous.bundleIdentifier === winner.bundleIdentifier &&
+        previous.end === bucketStart
+      ) {
+        previous.end = bucketEnd;
+        previous.activeDuration += winner.duration;
+        previous.otherDuration += totalActiveDuration - winner.duration;
+        previous.bucketCount += 1;
+        previous.otherAppCount = Math.max(
+          previous.otherAppCount,
+          candidates.length - 1
+        );
+        continue;
+      }
+
+      previous = {
+        kind: "weekly",
+        key: `week:${day.day}:${bucketStart}`,
+        day: day.day,
+        dayIndex: day.index,
+        start: bucketStart,
+        end: bucketEnd,
+        appName: winner.appName,
+        bundleIdentifier: winner.bundleIdentifier,
+        activeDuration: winner.duration,
+        otherDuration: totalActiveDuration - winner.duration,
+        otherAppCount: candidates.length - 1,
+        bucketCount: 1
+      };
+      result.push(previous);
+    }
+  }
+
+  return result;
+}
+
+function renderWeeklyView() {
+  const days = selectedWeekDays();
+  const blocks = buildWeeklyBlocks();
+  const daysWithBlocks = new Set(blocks.map(block => block.day));
+
+  state.blocks = [];
+  state.displayBlocks = [];
+  state.weeklyBlocks = blocks;
+  state.selectedDisplayKey = null;
+  elements.timeline.classList.add("weekly-mode");
+  elements.blocks.classList.add("weekly-blocks");
+  elements.blocks.replaceChildren();
+  clearAxisSelection();
+  elements.weekDayLabels.replaceChildren();
+  elements.weekDayLabels.hidden = false;
+
+  for (const day of days) {
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "week-day-label";
+    label.textContent = formatWeekLabel(day.day);
+    label.disabled = !daysWithBlocks.has(day.day);
+    label.setAttribute("aria-label", `Show ${formatWeekLabel(day.day)} in day view`);
+    label.classList.toggle("selected", day.day === elements.day.value);
+    label.addEventListener("click", () => enterDayView(day.day));
+    elements.weekDayLabels.append(label);
+
+    const column = document.createElement("div");
+    column.className = "weekly-day";
+    column.dataset.day = day.day;
+    for (const block of blocks.filter(candidate => candidate.day === day.day)) {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "weekly-block";
+      node.style.setProperty("--block-color", colorFor(block.bundleIdentifier));
+      node.style.top = `${(block.start - day.start) / (day.end - day.start) * 100}%`;
+      node.style.height = `${(block.end - block.start) / (day.end - day.start) * 100}%`;
+      const description =
+        `${block.appName}\n${formatClock(block.start)}–${formatClock(block.end)}` +
+        `\n${formatDuration(block.activeDuration)} active in ${block.bucketCount} ` +
+        `${block.bucketCount === 1 ? "bucket" : "buckets"}` +
+        (block.otherDuration > 0
+          ? `\n${formatDuration(block.otherDuration)} from ${block.otherAppCount} other ` +
+            `${block.otherAppCount === 1 ? "app" : "apps"}`
+          : "");
+      node.title = description;
+      node.setAttribute("aria-label", description.replaceAll("\n", ", "));
+      node.append(Object.assign(document.createElement("strong"), {
+        textContent: block.appName
+      }));
+      node.addEventListener("click", () => enterDayView(day.day));
+      column.append(node);
+    }
+    elements.blocks.append(column);
+  }
+
+  renderAxis();
+}
+
 function renderAxis() {
   elements.axis.replaceChildren();
+  if (state.mode === "week") {
+    const days = selectedWeekDays();
+    for (let index = 0; index <= 6; index += 1) {
+      const ratio = index / 6;
+      const timestamp = days[0].start + ratio * 24 * 60 * 60 * 1000;
+      const label = document.createElement("time");
+      label.textContent = formatClock(timestamp);
+      label.style.top = `${ratio * 100}%`;
+      elements.axis.append(label);
+    }
+    elements.range.textContent = `Week of ${formatWeekRange(days)}`;
+    return;
+  }
   if (state.viewportStart === null) return;
 
   for (let index = 0; index <= 6; index += 1) {
@@ -886,7 +1167,61 @@ function renderAxis() {
     `${formatClock(state.viewportStart)}–${formatClock(state.viewportEnd)}`;
 }
 
+function updateViewModeControls() {
+  const weekly = state.mode === "week";
+  elements.dayView.setAttribute("aria-pressed", String(!weekly));
+  elements.weekView.setAttribute("aria-pressed", String(weekly));
+  elements.fitActivity.hidden = weekly;
+  elements.fullDay.hidden = weekly;
+  elements.zoomIn.hidden = weekly;
+  elements.zoomOut.hidden = weekly;
+  elements.weekDayLabels.hidden = !weekly;
+}
+
+function setDetailEmptyMode(weekly) {
+  elements.detailEmptyTitle.textContent = weekly
+    ? "Select a day"
+    : "Select an activity";
+  elements.detailEmptyDescription.textContent = weekly
+    ? "Click a day or activity to open its detailed timeline."
+    : "Click a block to inspect its window-level subactivities.";
+}
+
+function enterDayView(day) {
+  if (!availableDays().includes(day)) return;
+  elements.day.value = day;
+  setViewMode("day");
+}
+
+function setViewMode(mode) {
+  if (mode !== "day" && mode !== "week") return;
+  const changed = state.mode !== mode;
+  state.mode = mode;
+  state.selectedDisplayKey = null;
+  state.expandedSubactivityGroups.clear();
+  updateViewModeControls();
+  setDetailEmptyMode(mode === "week");
+
+  if (mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+    updateDayNavigation();
+  } else if (changed) {
+    renderSelectedDay({ clearFilter: false });
+  }
+}
+
 function repositionBlocks() {
+  if (state.mode === "week") {
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+    return;
+  }
   renderDisplayBlocks();
   renderAxis();
 }
@@ -931,6 +1266,7 @@ function clearAxisSelection() {
 }
 
 function fitActivity({ render = true } = {}) {
+  if (state.mode === "week") return;
   const bounds = dayBounds(elements.day.value);
   const activePeriods = selectedDayPeriods().filter(
     period => period.bundle_identifier !== "__idle__"
@@ -963,11 +1299,13 @@ function fitActivity({ render = true } = {}) {
 }
 
 function showFullDay() {
+  if (state.mode === "week") return;
   const bounds = dayBounds(elements.day.value);
   setViewport(bounds.start, bounds.end);
 }
 
 function zoom(factor, centerRatio = 0.5) {
+  if (state.mode === "week") return;
   const oldSpan = state.viewportEnd - state.viewportStart;
   const center = state.viewportStart + oldSpan * centerRatio;
   const newSpan = oldSpan * factor;
@@ -978,16 +1316,19 @@ function zoom(factor, centerRatio = 0.5) {
 }
 
 function renderSummary() {
-  const observed = selectedDayActiveDuration();
+  const observed = state.mode === "week"
+    ? selectedWeekActiveDuration()
+    : selectedDayActiveDuration();
   elements.status.textContent =
     `${state.observationCount.toLocaleString()} stored observations · live`;
-  elements.total.textContent =
-    `${state.displayBlocks.length} visible blocks · ${formatDuration(observed)} observed`;
+  elements.total.textContent = state.mode === "week"
+    ? `${state.weeklyBlocks.length} weekly blocks · ${formatDuration(observed)} observed`
+    : `${state.displayBlocks.length} visible blocks · ${formatDuration(observed)} observed`;
   renderTimelineFilter();
 }
 
 function appNameForBundle(bundleIdentifier) {
-  const period = selectedDayPeriods().find(
+  const period = selectedViewPeriods().find(
     candidate => candidate.bundle_identifier === bundleIdentifier
   );
   return period?.app_name || bundleIdentifier;
@@ -1006,6 +1347,14 @@ function setAppFilter(bundleIdentifier) {
   state.appFilter = bundleIdentifier;
   state.selectedDisplayKey = null;
   state.expandedSubactivityGroups.clear();
+  if (state.mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+    return;
+  }
   buildBlocks();
   renderDisplayBlocks();
   renderSummary();
@@ -1018,6 +1367,14 @@ function clearAppFilter() {
   state.appFilter = null;
   state.selectedDisplayKey = null;
   state.expandedSubactivityGroups.clear();
+  if (state.mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+    return;
+  }
   buildBlocks();
   renderDisplayBlocks();
   renderSummary();
@@ -1047,9 +1404,25 @@ function mergedIntervalDuration(intervals) {
 }
 
 function selectedDayPeriods() {
-  const bounds = dayBounds(elements.day.value);
+  return periodsWithinBounds(dayBounds(elements.day.value));
+}
+
+function selectedWeekPeriods() {
+  return periodsWithinBounds(selectedWeekBounds());
+}
+
+function selectedViewPeriods() {
+  return state.mode === "week"
+    ? selectedWeekPeriods()
+    : selectedDayPeriods();
+}
+
+function periodsWithinBounds(bounds) {
   return state.periods
-    .filter(periodIsOnSelectedDay)
+    .filter(period => (
+      new Date(period.end).getTime() > bounds.start &&
+      new Date(period.start).getTime() < bounds.end
+    ))
     .map(period => ({
       ...period,
       clippedStart: Math.max(new Date(period.start).getTime(), bounds.start),
@@ -1062,6 +1435,17 @@ function selectedDayPeriods() {
 function selectedDayActiveDuration() {
   return mergedIntervalDuration(
     selectedDayPeriods()
+      .filter(period => period.bundle_identifier !== "__idle__")
+      .map(period => ({
+        start: period.clippedStart,
+        end: period.clippedEnd
+      }))
+  );
+}
+
+function selectedWeekActiveDuration() {
+  return mergedIntervalDuration(
+    selectedWeekPeriods()
       .filter(period => period.bundle_identifier !== "__idle__")
       .map(period => ({
         start: period.clippedStart,
@@ -1252,6 +1636,15 @@ function setSubactivityHighlight(groupKey, highlighted) {
 }
 
 function renderDetail() {
+  if (state.mode === "week") {
+    state.expandedSubactivityGroups.clear();
+    elements.detailEmpty.hidden = false;
+    elements.detailContent.hidden = true;
+    elements.calendarStatus.textContent = "";
+    setDetailEmptyMode(true);
+    return;
+  }
+
   const block = state.displayBlocks.find(
     candidate => candidate.key === state.selectedDisplayKey
   );
@@ -1260,6 +1653,7 @@ function renderDetail() {
     elements.detailEmpty.hidden = false;
     elements.detailContent.hidden = true;
     elements.calendarStatus.textContent = "";
+    setDetailEmptyMode(false);
     return;
   }
 
@@ -1446,14 +1840,21 @@ function selectBlock(displayKey) {
   renderDetail();
 }
 
-function renderSelectedDay() {
-  state.appFilter = null;
+function renderSelectedDay({ clearFilter = true } = {}) {
+  state.mode = "day";
+  if (clearFilter) state.appFilter = null;
   state.expandedSubactivityGroups.clear();
   state.selectedDisplayKey = null;
   buildBlocks();
   rebuildColorAssignments();
+  updateViewModeControls();
+  setDetailEmptyMode(false);
   fitActivity({ render: false });
   elements.blocks.replaceChildren();
+  elements.blocks.classList.remove("weekly-blocks");
+  elements.timeline.classList.remove("weekly-mode");
+  elements.weekDayLabels.replaceChildren();
+  elements.weekDayLabels.hidden = true;
   renderDisplayBlocks();
   renderAxis();
   renderSummary();
@@ -1466,7 +1867,15 @@ function applySnapshot(payload) {
   state.observationCount = payload.observation_count;
   state.periods = payload.periods;
   syncDayOptions();
-  renderSelectedDay();
+  if (state.mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+  } else {
+    renderSelectedDay();
+  }
 }
 
 function appendOrUpdateBlock(periodIndex, previousPeriod) {
@@ -1523,6 +1932,20 @@ function applyPeriodChange(change) {
   const previousDay = elements.day.value;
   syncDayOptions();
 
+  if (state.mode === "week") {
+    const bounds = selectedWeekBounds();
+    const changedStart = new Date(change.period.start).getTime();
+    const changedEnd = new Date(change.period.end).getTime();
+    if (changedEnd > bounds.start && changedStart < bounds.end) {
+      rebuildColorAssignments();
+      renderWeeklyView();
+    }
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+    return;
+  }
+
   if (elements.day.value !== previousDay) {
     renderSelectedDay();
     return;
@@ -1535,7 +1958,15 @@ function applyPeriodChange(change) {
   renderDailySummary();
 
   const changedEnd = new Date(change.period.end).getTime();
-  if (state.followingLiveEdge && changedEnd > state.viewportEnd) {
+  const contributesToVisibleTimeline =
+    periodIsOnSelectedDay(change.period) &&
+    change.period.bundle_identifier !== "__idle__" &&
+    (!state.appFilter || change.period.bundle_identifier === state.appFilter);
+  if (
+    contributesToVisibleTimeline &&
+    state.followingLiveEdge &&
+    changedEnd > state.viewportEnd
+  ) {
     const span = state.viewportEnd - state.viewportStart;
     const nextEnd = changedEnd + span * 0.08;
     setViewport(nextEnd - span, nextEnd, { follow: true });
@@ -1578,13 +2009,23 @@ elements.addGoogleCalendar.addEventListener(
   addSelectedActivityToGoogleCalendar
 );
 elements.day.addEventListener("change", () => {
-  renderSelectedDay();
+  if (state.mode === "week") {
+    rebuildColorAssignments();
+    renderWeeklyView();
+    renderSummary();
+    renderDailySummary();
+    renderDetail();
+  } else {
+    renderSelectedDay();
+  }
   updateDayNavigation();
 });
 elements.previousDay.addEventListener("click", () => moveDay(1));
 elements.nextDay.addEventListener("click", () => moveDay(-1));
 elements.today.addEventListener("click", selectToday);
 elements.clearAppFilter.addEventListener("click", clearAppFilter);
+elements.dayView.addEventListener("click", () => setViewMode("day"));
+elements.weekView.addEventListener("click", () => setViewMode("week"));
 elements.fitActivity.addEventListener("click", () => fitActivity());
 elements.fullDay.addEventListener("click", showFullDay);
 elements.zoomIn.addEventListener("click", () => zoom(0.5));
@@ -1598,6 +2039,7 @@ elements.refresh.addEventListener("click", () => {
   }
 });
 elements.timeline.addEventListener("wheel", event => {
+  if (state.mode === "week") return;
   event.preventDefault();
   const bounds = elements.timeline.getBoundingClientRect();
   zoom(Math.exp(event.deltaY * 0.002), (event.clientY - bounds.top) / bounds.height);
@@ -1605,6 +2047,7 @@ elements.timeline.addEventListener("wheel", event => {
 
 let axisDrag = null;
 elements.axis.addEventListener("pointerdown", event => {
+  if (state.mode === "week") return;
   if (state.viewportStart === null || state.viewportEnd === null) return;
   event.preventDefault();
   event.stopPropagation();
@@ -1659,6 +2102,7 @@ window.addEventListener("keydown", event => {
 
 let drag = null;
 elements.timeline.addEventListener("pointerdown", event => {
+  if (state.mode === "week") return;
   if (event.target.closest(".activity-block")) return;
   drag = {
     y: event.clientY,

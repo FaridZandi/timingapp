@@ -10,10 +10,13 @@ final class WebDashboardServer {
 
     private init() {}
 
+    func startIfNeeded() {
+        guard process?.isRunning != true else { return }
+        start()
+    }
+
     func openTimeline() {
-        if process?.isRunning != true {
-            start()
-        }
+        startIfNeeded()
 
         // Give a newly launched server a brief moment to bind its port.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [dashboardURL] in

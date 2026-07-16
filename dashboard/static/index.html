@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Activity Timeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260715-accordion">
+  <link rel="stylesheet" href="/styles.css?v=20260716-phase5">
 </head>
 <body>
   <main>
@@ -36,6 +36,10 @@
             <h2 id="timeline-heading">Observed time</h2>
             <p id="range"></p>
           </div>
+          <div class="view-toggle" aria-label="Timeline view">
+            <button id="day-view" type="button" aria-pressed="true">Day</button>
+            <button id="week-view" type="button" aria-pressed="false">Week</button>
+          </div>
           <div class="timeline-controls" aria-label="Timeline zoom controls">
             <button id="zoom-out" type="button" title="Zoom out">−</button>
             <button id="zoom-in" type="button" title="Zoom in">+</button>
@@ -47,6 +51,7 @@
           <span>Showing <strong id="timeline-filter-app"></strong></span>
           <button id="clear-app-filter" type="button">Clear filter</button>
         </div>
+        <div id="week-day-labels" class="week-day-labels" hidden></div>
         <div
           id="timeline"
           class="timeline"
@@ -63,8 +68,8 @@
       <aside id="detail" class="card detail-card">
         <div id="detail-empty" class="detail-empty">
           <span>↖</span>
-          <h2>Select an activity</h2>
-          <p>Click a block to inspect its window-level subactivities.</p>
+          <h2 id="detail-empty-title">Select an activity</h2>
+          <p id="detail-empty-description">Click a block to inspect its window-level subactivities.</p>
         </div>
         <div id="detail-content" class="detail-content" hidden>
           <div class="detail-accent" id="detail-accent"></div>
@@ -102,6 +107,6 @@
     </section>
   </main>
 
-  <script src="/app.js?v=20260715-accordion"></script>
+  <script src="/app.js?v=20260716-phase5"></script>
 </body>
 </html>

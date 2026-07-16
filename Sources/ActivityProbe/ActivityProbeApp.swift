@@ -24,6 +24,7 @@ struct ActivityProbeApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ActivityModel.shared.start()
+        WebDashboardServer.shared.startIfNeeded()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(

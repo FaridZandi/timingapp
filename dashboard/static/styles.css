@@ -197,6 +197,27 @@ button { cursor: pointer; }
 
 .timeline-controls { gap: 5px; }
 
+.view-toggle {
+  display: flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.view-toggle button {
+  background: transparent;
+  border-color: transparent;
+  color: #747d82;
+  font-size: 12px;
+  margin: 0;
+  padding: 6px 9px;
+}
+
+.view-toggle button[aria-pressed="true"] {
+  background: #20272b;
+  border-color: #20272b;
+  color: #fff;
+}
+
 .timeline-controls button {
   margin: 0;
   padding: 6px 9px;
@@ -223,6 +244,94 @@ button { cursor: pointer; }
   position: relative;
   touch-action: none;
   user-select: none;
+}
+
+.week-day-labels {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin: -5px 18px 8px 94px;
+}
+
+.week-day-labels[hidden] { display: none; }
+
+.week-day-label {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #747d82;
+  font-size: 11px;
+  margin: 0;
+  overflow: hidden;
+  padding: 4px 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.week-day-label:hover:not(:disabled),
+.week-day-label.selected {
+  background: #eeece7;
+  color: #20272b;
+}
+
+.week-day-label:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.timeline.weekly-mode {
+  cursor: default;
+}
+
+.timeline.weekly-mode .blocks {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.weekly-day {
+  border-left: 1px solid #e3e0da;
+  min-width: 0;
+  position: relative;
+}
+
+.weekly-day:last-child { border-right: 1px solid #e3e0da; }
+
+.weekly-block {
+  --block-color: #526ed3;
+  background: color-mix(in srgb, var(--block-color) 88%, white);
+  border: 0;
+  border-left: 3px solid var(--block-color);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(24, 29, 32, 0.1);
+  color: #fff;
+  display: block;
+  left: 3px;
+  margin: 0;
+  min-height: 3px;
+  overflow: hidden;
+  padding: 2px 4px;
+  position: absolute;
+  right: 3px;
+  text-align: left;
+  width: auto;
+}
+
+.weekly-block:hover,
+.weekly-block:focus-visible {
+  filter: brightness(1.05);
+  outline: 2px solid #20272b;
+  outline-offset: 1px;
+  z-index: 2;
+}
+
+.weekly-block strong {
+  display: block;
+  font-size: 10px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .timeline.dragging { cursor: grabbing; }

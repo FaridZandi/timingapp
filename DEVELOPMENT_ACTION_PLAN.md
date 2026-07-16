@@ -5,11 +5,11 @@ This plan is based on the current implementation and the open items in
 new features: several reported bugs share the same cause, and adding weekly
 navigation or filters before fixing that model would duplicate the problem.
 
-**Progress:** Phases 1.1 and 1.2 are implemented in
-`dashboard/static/app.js`. The Phase 3.6 Idle-appearance experiment is also
-implemented: Idle remains in the server data and daily aggregate, but is
-excluded from timeline block construction. Phases 1.1–1.3 and Phases 2–4 are
-now implemented; the remaining phases are pending.
+**Progress:** Phases 1.1–1.3 and Phases 2–5 are implemented. The Phase 3.6
+Idle-appearance experiment is also implemented: Idle remains in the server
+data and daily aggregate, but is excluded from timeline block construction.
+Phase 5 adds a deliberately lossy weekly overview while preserving the daily
+timeline as the detailed view.
 
 ## Current assessment
 
@@ -218,7 +218,7 @@ The existing `/api/app-icon` endpoint is reused in labelled timeline blocks. A
 generic app glyph is shown when an icon is missing, and icons are not displayed
 inside sub-2px blocks.
 
-## Phase 5 — Weekly view
+## Phase 5 — Weekly view — implemented
 
 **Goal:** give a high-level weekly scan without carrying the daily timeline’s
 parallel-lane complexity into a smaller space.
@@ -238,6 +238,10 @@ The server already supplies historical periods, so the first weekly view does
 not require a new API. Keep live updates working by rebuilding only the day(s)
 affected by an incoming period.
 
+Implemented in `dashboard/static/app.js` with an explicit `state.mode` and
+range helpers for selected days and Monday–Sunday weeks. Weekly live updates
+rebuild only when the changed period intersects the visible week.
+
 ### 13. Build a seven-column single-lane weekly timeline
 
 At each time slice, choose the app with the greatest active duration in that
@@ -255,6 +259,11 @@ weekly summarization is a distinct, deliberately lossy view.
 - No week block claims more time than its underlying selected app had in its
   bucket.
 - Selecting a day returns to the existing detailed daily view.
+
+Implemented with fixed 15-minute buckets, winner selection by active duration,
+usage-ranked tie breaking, adjacent same-app bucket merging, per-block titles
+that report active and competing duration, and clickable day labels/blocks that
+return to day view.
 
 ## Phase 6 — Notion integration, after the local workflow is stable
 

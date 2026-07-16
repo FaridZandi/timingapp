@@ -7,7 +7,7 @@
 
 [ ] Adding buttons to move to the next/previous day in the timeline view. Add a "Today" button to the timeline view. 
 
-[ ] Add a "weekly" view to the timeline view. The weekly view wouldn't have the capacity for multiple apps to be shown in parallel. The timeline should somehow decide on a single lane that shows the most important app at each time. and then show the 7 days in a 7 columns. 
+[x] Add a "weekly" view to the timeline view. The weekly view wouldn't have the capacity for multiple apps to be shown in parallel. The timeline should somehow decide on a single lane that shows the most important app at each time. and then show the 7 days in a 7 columns.
 
 [ ] consistency problem: At a certain zoom level, I can see a block. If I zoom in more, the block disappears. This is because at the lower zoom level, the smaller blocks are close enough to be merged into a bigger block. But when I zoom in, the smaller blocks get far from each other and are no longer merged. Each individual block too small to be shown, so the whole thing disappears from view. 
 
@@ -35,4 +35,3 @@
     [ ] Show the app name in the block, even if it's small. 
     [ ] Artifically expand the block to a minimum width, and show the app name in it. 
     [ ] Show the app name in a tooltip. Maybe an expanded corner of the block. 
-
