@@ -5,10 +5,6 @@ enum APIKeyStore {
     private static let service = "local.activityprobe.openai"
     private static let account = "default"
 
-    static var hasOpenAIKey: Bool {
-        openAIKey() != nil
-    }
-
     static func openAIKey() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

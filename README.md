@@ -16,6 +16,10 @@ The app has no Dock icon; its local dashboard server starts when the app
 launches. Use the clock icon in the menu bar to open the timeline in your
 browser, pause tracking, reveal the data file, or quit.
 
+The dashboard starts without reading the OpenAI key. The key is read from
+Keychain only when opening the timeline (or after changing the key), so
+launching the menu-bar app does not trigger a Keychain authorization prompt.
+
 Do not keep the old `swift run activity-probe` process running after switching
 to the app.
 

@@ -74,7 +74,7 @@ struct ActivityMenu: View {
             NSWorkspace.shared.activateFileViewerSelecting([model.dataFileURL])
         }
 
-        Button(APIKeyStore.hasOpenAIKey ? "OpenAI API Key… ✓" : "OpenAI API Key…") {
+        Button("OpenAI API Key…") {
             APIKeyWindowController.shared.show()
         }
 
@@ -105,9 +105,7 @@ final class APIKeyWindowController {
         let field = NSSecureTextField(
             frame: NSRect(x: 0, y: 0, width: 360, height: 24)
         )
-        field.placeholderString = APIKeyStore.hasOpenAIKey
-            ? "A key is already saved; enter a replacement"
-            : "sk-…"
+        field.placeholderString = "sk-…"
 
         let alert = NSAlert()
         alert.messageText = "OpenAI API Key"

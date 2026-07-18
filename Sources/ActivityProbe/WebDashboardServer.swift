@@ -7,19 +7,32 @@ final class WebDashboardServer {
 
     private let dashboardURL = URL(string: "http://127.0.0.1:8765")!
     private var process: Process?
+    private var processHasAPIKey = false
 
     private init() {}
 
     func startIfNeeded() {
         guard process?.isRunning != true else { return }
-        start()
+        start(includeAPIKey: false)
     }
 
     func openTimeline() {
-        startIfNeeded()
+        let startupDelay: TimeInterval
+        if process?.isRunning == true {
+            if !processHasAPIKey {
+                stop()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.start(includeAPIKey: true)
+                }
+            }
+            startupDelay = processHasAPIKey ? 0.35 : 0.55
+        } else {
+            start(includeAPIKey: true)
+            startupDelay = 0.35
+        }
 
         // Give a newly launched server a brief moment to bind its port.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [dashboardURL] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + startupDelay) { [dashboardURL] in
             NSWorkspace.shared.open(dashboardURL)
         }
     }
@@ -28,17 +41,18 @@ final class WebDashboardServer {
         guard let process, process.isRunning else { return }
         process.terminate()
         self.process = nil
+        processHasAPIKey = false
     }
 
     func configurationDidChange() {
         guard process?.isRunning == true else { return }
         stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.start()
+            self?.start(includeAPIKey: true)
         }
     }
 
-    private func start() {
+    private func start(includeAPIKey: Bool) {
         guard let scriptURL = serverScriptURL() else {
             showError("The bundled dashboard server could not be found.")
             return
@@ -48,7 +62,7 @@ final class WebDashboardServer {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = [scriptURL.path]
         var environment = ProcessInfo.processInfo.environment
-        if let key = APIKeyStore.openAIKey() {
+        if includeAPIKey, let key = APIKeyStore.openAIKey() {
             environment["OPENAI_API_KEY"] = key
         } else {
             environment.removeValue(forKey: "OPENAI_API_KEY")
@@ -60,6 +74,7 @@ final class WebDashboardServer {
         do {
             try process.run()
             self.process = process
+            processHasAPIKey = includeAPIKey
         } catch {
             showError("The dashboard server could not start: \(error.localizedDescription)")
         }
